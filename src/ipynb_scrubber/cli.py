@@ -28,7 +28,7 @@ def cli() -> None:
     parser.add_argument(
         '--clear-text',
         default='# TODO: Implement this',
-        help='Text for cleared cells',
+        help='Text for cleared cells where unspecified',
     )
     parser.add_argument(
         '--omit-tag',

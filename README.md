@@ -18,11 +18,13 @@ removing instructor-only content.
 
 - **Clear solution cells**: Replace cell contents with placeholder text while
   preserving structure
+- **Custom replacement text**: Use cell-specific text instead of default placeholder
+- **All cell types supported**: Works with code, markdown, and raw cells
 - **Remove cells entirely**: Omit instructor-only cells from the output
+- **Multiple syntax options**: Use cell tags or cell-type-appropriate comment syntax
 - **Preserve structure**: Maintain notebook structure and metadata
 - **Clear all outputs**: Remove all cell outputs and execution counts for a
   clean slate
-- **Support for tags**: Use cell tags or Quarto-style options to mark cells
 - **Simple CLI**: Unix-style tool that reads from stdin and writes to stdout
 
 ## Installation
@@ -45,8 +47,8 @@ ipynb-scrubber < input.ipynb > output.ipynb
 ### Options
 
 - `--clear-tag TAG`: Tag marking cells to clear (default: `scrub-clear`)
-- `--clear-text TEXT`: Replacement text for cleared cells (default: `# TODO:
-  Implement this`)
+- `--clear-text TEXT`: Replacement text for cleared cells where unspecified
+  (default: `# TODO: Implement this`)
 - `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
 
 ### Examples
@@ -73,63 +75,143 @@ ipynb-scrubber --clear-text "# YOUR CODE HERE" < lecture.ipynb > exercise.ipynb
 
 There are two ways to mark cells for processing:
 
-### 1. Cell Tags
+### 1. Cell Tags (All Cell Types)
 
-Add tags to cells using Jupyter's tag interface:
+Add tags to cells using Jupyter's tag interface. This works for all cell types
+(code, markdown, raw):
 
 - Add `scrub-clear` tag to solution cells that should be cleared
 - Add `scrub-omit` tag to cells that should be removed entirely
 
-### 2. Quarto Options
+### 2. Source-Based Options (Code & Markdown)
 
-Use Quarto-style cell options at the beginning of code cells:
+Use cell-type-appropriate syntax for more control, including custom replacement
+text:
+
+#### Code Cells - Quarto Options
 
 ```python
 #| scrub-clear
 def secret_solution():
     return 42
-```
 
-```python
+# Or with custom replacement text:
+#| scrub-clear: # WRITE YOUR SOLUTION HERE
+def another_solution():
+    return "hidden"
+
+# To omit entirely:
 #| scrub-omit
-# This cell will be removed entirely
+# This cell will be removed
 print("Instructor only!")
 ```
 
-## Example
+#### Markdown Cells - HTML Comments
 
-### Input "notebook"
+```markdown
+<!-- scrub-clear -->
+## Answer
+
+The solution is 42 because...
+
+<!-- Or with custom replacement text: -->
+<!-- scrub-clear: **Write your answer here** -->
+## Another Question
+
+This answer will be replaced.
+
+<!-- To omit entirely: -->
+<!-- scrub-omit -->
+## Instructor Notes
+
+These notes are only for the instructor.
+```
+
+#### Raw Cells - Tags Only
+
+Raw cells only support metadata tags to avoid format conflicts:
 
 ```python
-# Cell 1 - Instructions (no tags)
-# This will remain unchanged
-print("Exercise: implement the function below")
+# Cell metadata: {"tags": ["scrub-clear"]}
+$$\int_0^1 x^2 dx = \frac{1}{3}$$
 
-# Cell 2 - Solution (tagged: scrub-clear)
+# Cell metadata: {"tags": ["scrub-omit"]}
+% This LaTeX comment will be omitted entirely
+```
+
+### Custom Replacement Text
+
+When using source-based options, you can specify custom text to replace the
+cleared content:
+
+- `#| scrub-clear: Your custom text` (code cells)
+- `<!-- scrub-clear: Your custom text -->` (markdown cells)
+- Empty text: `#| scrub-clear:` (results in empty cell)
+
+If no custom text is provided, the default `--clear-text` value is used.
+
+## Example
+
+### Input Notebook
+
+**Code Cell 1** (no tags):
+
+```python
+# Instructions - this will remain unchanged
+print("Exercise: implement the functions below")
+```
+
+**Code Cell 2** (Quarto option with custom text):
+
+```python
+#| scrub-clear: # TODO: Write your add function here
 def add(a, b):
     return a + b
 
 result = add(1, 2)
 print(f"Result: {result}")
+```
 
-# Cell 3 - Test (tagged: scrub-omit)
-# This cell will be removed
+**Markdown Cell 3** (HTML comment):
+
+```markdown
+<!-- scrub-clear: **Write your explanation here** -->
+## Solution Explanation
+
+The add function works by using the + operator...
+```
+
+**Code Cell 4** (cell tag - will be omitted):
+
+```python
+# Cell has metadata: {"tags": ["scrub-omit"]}
+# This cell will be removed entirely
 assert add(1, 2) == 3
 print("Tests pass!")
 ```
 
-### Output "notebook"
+### Output Notebook
+
+**Code Cell 1** (unchanged):
 
 ```python
-# Cell 1 - Instructions (unchanged)
-# This will remain unchanged
-print("Exercise: implement the function below")
-
-# Cell 2 - Solution (cleared)
-# TODO: Implement this
-
-# (Cell 3 is omitted entirely)
+# Instructions - this will remain unchanged
+print("Exercise: implement the functions below")
 ```
+
+**Code Cell 2** (cleared with custom text):
+
+```python
+# TODO: Write your add function here
+```
+
+**Markdown Cell 3** (cleared with custom text):
+
+```markdown
+**Write your explanation here**
+```
+
+**Code Cell 4** (omitted entirely)
 
 ## Behavior
 
@@ -149,4 +231,7 @@ Apache License 2.0
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request, but note
+that comprehensive test coverage and clear justification for why the request
+should be considered (keeping in mind new features increase the maintenance
+burden) should be included.

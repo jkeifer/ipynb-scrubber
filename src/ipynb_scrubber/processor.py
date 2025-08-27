@@ -18,23 +18,49 @@ class Notebook(TypedDict):
     nbformat_minor: int
 
 
-def has_quarto_option(cell: Cell, option: str) -> bool:
-    """Check if a code cell has a specific Quarto option.
+def get_option_value(cell: Cell, option: str) -> tuple[bool, str | None]:
+    """Get the value of a cell clearing option from a notebook cell.
+
+    Uses cell-type-appropriate syntax:
+    - Code cells: Quarto options (#| option: value)
+    - Markdown cells: HTML comments (<!-- option: value -->)
+    - Raw cells: Not supported (use metadata tags only)
 
     Args:
         cell: A notebook cell dictionary containing cell_type and source
-        option: The Quarto option name to check for (e.g., 'solution')
+        option: The option name to check for
 
     Returns:
-        True if the cell has the specified Quarto option set to true/yes or no value
+        Tuple of (enabled, custom_text):
+        - (False, None): option not present
+        - (True, None): option present, use default text
+        - (True, str): option present with custom text (including empty string)
 
     Example:
-        >>> cell = {'cell_type': 'code', 'source': '#| solution: true\\nprint("hello")'}
-        >>> has_quarto_option(cell, 'solution')
-        True
+        >>> cell = {
+        ...     'cell_type': 'code',
+        ...     'source': '#| scrub-clear\\nprint("hello")',
+        ... }
+        >>> get_option_value(cell, 'scrub-clear')
+        (True, None)
+        >>> cell = {
+        ...     'cell_type': 'markdown',
+        ...     'source': '<!-- scrub-clear: Custom text -->\\n## Question',
+        ... }
+        >>> get_option_value(cell, 'scrub-clear')
+        (True, 'Custom text')
     """
-    if cell.get('cell_type') != 'code':
-        return False
+    cell_type = cell.get('cell_type')
+
+    if cell_type == 'code':
+        start_marker = '#|'
+        end_suffix = ''
+    elif cell_type == 'markdown':
+        start_marker = '<!--'
+        end_suffix = '-->'
+    else:
+        # Other cell types (raw) do not support options
+        return (False, None)
 
     source = cell.get('source', '')
     if isinstance(source, list):
@@ -43,18 +69,20 @@ def has_quarto_option(cell: Cell, option: str) -> bool:
     lines = source.split('\n')
     for line in lines:
         trimmed = line.strip()
-        if trimmed.startswith('#|'):
-            option_part = trimmed[2:].strip()
+        if trimmed.startswith(start_marker):
+            # Extract the option part
+            option_part = trimmed[len(start_marker) :].removesuffix(end_suffix).strip()
             if ':' in option_part:
                 key, value = option_part.split(':', 1)
                 if key.strip() == option:
-                    val = value.strip().lower()
-                    if not val or val in ('true', 'yes'):
-                        return True
-        elif trimmed and not trimmed.startswith('#'):
+                    return (True, value.lstrip())
+            else:
+                if option_part == option:
+                    return (True, None)
+        elif trimmed and not trimmed.startswith(start_marker):
             break
 
-    return False
+    return (False, None)
 
 
 def validate_notebook(notebook: Any) -> None:
@@ -104,29 +132,35 @@ def should_omit_cell(cell: Cell, omit_tag: str) -> bool:
         True if the cell should be omitted
     """
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
-    return omit_tag in tags or has_quarto_option(cell, omit_tag)
+    enabled, _ = get_option_value(cell, omit_tag)
+    return omit_tag in tags or enabled
 
 
-def should_clear_cell(cell: Cell, clear_tag: str) -> bool:
-    """Check if a cell's content should be cleared.
+def should_clear_cell(cell: Cell, clear_tag: str) -> tuple[bool, str | None]:
+    """Check if a cell's content should be cleared and get custom text if any.
 
     Args:
         cell: The cell to check
         clear_tag: Tag marking cells to clear
 
     Returns:
-        True if the cell content should be cleared
+        Tuple of (should_clear, custom_text):
+        - (False, None): don't clear
+        - (True, None): clear with default text
+        - (True, str): clear with custom text
     """
-    if cell.get('cell_type') != 'code':
-        return False
+    # Check source-based options for code and markdown cells (supports custom text)
+    if cell.get('cell_type') in ['code', 'markdown']:
+        enabled, custom_text = get_option_value(cell, clear_tag)
+        if enabled:
+            return (True, custom_text)
 
-    # Check Quarto option
-    if has_quarto_option(cell, clear_tag):
-        return True
-
-    # Check cell tags
+    # Check cell tags as fallback for all cell types (no custom text support)
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
-    return clear_tag in tags
+    if clear_tag in tags:
+        return (True, None)
+
+    return (False, None)
 
 
 def process_cell(cell: Cell, clear_tag: str, clear_text: str) -> Cell:
@@ -145,8 +179,10 @@ def process_cell(cell: Cell, clear_tag: str, clear_text: str) -> Cell:
     cell.pop('execution_count', None)
 
     # Clear content if needed
-    if should_clear_cell(cell, clear_tag):
-        cell['source'] = clear_text + '\n'
+    should_clear, custom_text = should_clear_cell(cell, clear_tag)
+    if should_clear:
+        text_to_use = custom_text if custom_text is not None else clear_text
+        cell['source'] = text_to_use + '\n'
 
     return cell
 

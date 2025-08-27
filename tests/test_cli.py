@@ -78,7 +78,7 @@ def basic_notebook() -> Notebook:
                 'cell_type': 'code',
                 'metadata': {},
                 'source': [
-                    '#| scrub-clear: true\n',
+                    '#| scrub-clear\n',
                     '# Solution cell with Quarto option\n',
                     'def another_solution():\n',
                     '    return "hidden"',
@@ -88,7 +88,6 @@ def basic_notebook() -> Notebook:
                 'cell_type': 'code',
                 'metadata': {},
                 'source': [
-                    '#| scrub-clear: false\n',
                     '# This should NOT be cleared\n',
                     'visible_code = True',
                 ],
@@ -251,12 +250,12 @@ def test_omit_with_quarto():
         'cells': [
             {
                 'cell_type': 'code',
-                'source': "#| scrub-omit: true\nprint('omit me')",
+                'source': "#| scrub-omit\nprint('omit me')",
                 'metadata': {},
             },
             {
                 'cell_type': 'code',
-                'source': "#| scrub-omit: false\nprint('keep me')",
+                'source': "print('keep me')",
                 'metadata': {},
             },
         ],
@@ -416,3 +415,89 @@ def test_missing_cell_type():
     assert result.returncode == 1
     assert 'Error:' in result.stderr
     assert "missing required 'cell_type' field" in result.stderr
+
+
+def test_quarto_custom_text():
+    """Test Quarto clear tag with custom text."""
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'code',
+                'source': '#| scrub-clear: Custom replacement text\nprint("solution")',
+                'metadata': {},
+            },
+            {
+                'cell_type': 'code',
+                'source': '#| scrub-clear: \nprint("empty text")',
+                'metadata': {},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    output = run_scrubber(json.dumps(notebook))
+
+    assert len(output['cells']) == 2
+    assert output['cells'][0]['source'] == 'Custom replacement text\n'
+    assert output['cells'][1]['source'] == '\n'
+
+
+def test_markdown_cell_clearing():
+    """Test clearing markdown cells with HTML comments and tags."""
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'markdown',
+                'source': (
+                    '<!-- scrub-clear: **Your answer here** '
+                    '-->\n\n## Question 1\n\nWhat is the answer?'
+                ),
+                'metadata': {},
+            },
+            {
+                'cell_type': 'markdown',
+                'source': '## Question 2\n\nThis is an answer that should be cleared.',
+                'metadata': {'tags': ['scrub-clear']},
+            },
+            {
+                'cell_type': 'markdown',
+                'source': (
+                    '<!-- scrub-clear -->\n\n## Question 3\n\nAnother answer to clear.'
+                ),
+                'metadata': {},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    output = run_scrubber(json.dumps(notebook))
+
+    assert len(output['cells']) == 3
+    assert output['cells'][0]['source'] == '**Your answer here**\n'
+    assert output['cells'][1]['source'] == '# TODO: Implement this\n'
+    assert output['cells'][2]['source'] == '# TODO: Implement this\n'
+
+
+def test_raw_cell_clearing():
+    """Test clearing raw cells with metadata tags only."""
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'raw',
+                'source': '$$\\int_0^1 x^2 dx = \\frac{1}{3}$$',
+                'metadata': {'tags': ['scrub-clear']},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    output = run_scrubber(json.dumps(notebook))
+
+    assert len(output['cells']) == 1
+    assert output['cells'][0]['source'] == '# TODO: Implement this\n'
