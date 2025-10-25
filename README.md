@@ -25,7 +25,10 @@ removing instructor-only content.
 - **Preserve structure**: Maintain notebook structure and metadata
 - **Clear all outputs**: Remove all cell outputs and execution counts for a
   clean slate
-- **Simple CLI**: Unix-style tool that reads from stdin and writes to stdout
+- **Project-wide processing**: Process multiple notebooks with a single command
+  using a TOML config file
+- **Flexible CLI**: Unix-style stdin/stdout for single files, or config-based
+  batch processing for projects
 
 ## Installation
 
@@ -37,38 +40,134 @@ pip install ipynb-scrubber
 
 ## Usage
 
-The tool takes a notebook on `stdin` and will write the scrubbed version to
-`stdout`:
+The tool provides two commands for different workflows:
+
+### Single Notebook: `scrub-notebook`
+
+Process a single notebook via stdin/stdout (Unix-style):
 
 ```bash
-ipynb-scrubber < input.ipynb > output.ipynb
+ipynb-scrubber scrub-notebook < input.ipynb > output.ipynb
 ```
 
-### Options
+#### Options
 
 - `--clear-tag TAG`: Tag marking cells to clear (default: `scrub-clear`)
 - `--clear-text TEXT`: Replacement text for cleared cells where unspecified
   (default: `# TODO: Implement this`)
 - `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
 
-### Examples
+#### Examples
 
 Using default settings:
 
 ```bash
-ipynb-scrubber < lecture.ipynb > exercise.ipynb
+ipynb-scrubber scrub-notebook < lecture.ipynb > exercise.ipynb
 ```
 
 Using custom tags:
 
 ```bash
-ipynb-scrubber --clear-tag solution --omit-tag private < lecture.ipynb > exercise.ipynb
+ipynb-scrubber scrub-notebook \
+    --clear-tag solution \
+    --omit-tag private \
+    < lecture.ipynb > exercise.ipynb
 ```
 
 Using custom placeholder text:
 
 ```bash
-ipynb-scrubber --clear-text "# YOUR CODE HERE" < lecture.ipynb > exercise.ipynb
+ipynb-scrubber scrub-notebook \
+    --clear-text "# YOUR CODE HERE" \
+    < lecture.ipynb > exercise.ipynb
+```
+
+### Project-Wide: `scrub-project`
+
+Process multiple notebooks using a configuration file:
+
+```bash
+ipynb-scrubber scrub-project
+```
+
+The command searches for configuration in the following order, starting from
+the current directory and moving upward:
+
+1. `.ipynb-scrubber.toml` (standalone config file)
+1. `pyproject.toml` with `[tool.ipynb-scrubber]` section
+
+This means you can run the command from any subdirectory of your project.
+
+#### Configuration File Formats
+
+**Option 1: Standalone `.ipynb-scrubber.toml`**
+
+Create a `.ipynb-scrubber.toml` file with global options and file entries:
+
+```toml
+# Global options (optional - these are defaults)
+[options]
+clear-tag = "scrub-clear"
+clear-text = "# TODO: Implement this"
+omit-tag = "scrub-omit"
+
+# File entries (required - at least one)
+[[files]]
+input = "lectures/lesson1.ipynb"
+output = "exercises/lesson1.ipynb"
+
+[[files]]
+input = "lectures/lesson2.ipynb"
+output = "exercises/lesson2.ipynb"
+clear-text = "# YOUR CODE HERE"  # Override global option
+
+[[files]]
+input = "lectures/lesson3.ipynb"
+output = "exercises/lesson3.ipynb"
+clear-tag = "solution"  # Custom tag for this file
+omit-tag = "instructor"
+```
+
+Each file entry supports:
+
+- `input` (required): Path to source notebook
+- `output` (required): Path where scrubbed notebook will be written
+- `clear-tag` (optional): Override global clear tag
+- `clear-text` (optional): Override global clear text
+- `omit-tag` (optional): Override global omit tag
+
+**Option 2: Using `pyproject.toml`**
+
+Add configuration to your existing `pyproject.toml` under
+`[tool.ipynb-scrubber]`:
+
+```toml
+# Global options (optional - these are defaults)
+[tool.ipynb-scrubber.options]
+clear-tag = "scrub-clear"
+clear-text = "# TODO: Implement this"
+omit-tag = "scrub-omit"
+
+# File entries (required - at least one)
+[[tool.ipynb-scrubber.files]]
+input = "lectures/lesson1.ipynb"
+output = "exercises/lesson1.ipynb"
+
+[[tool.ipynb-scrubber.files]]
+input = "lectures/lesson2.ipynb"
+output = "exercises/lesson2.ipynb"
+clear-text = "# YOUR CODE HERE"
+```
+
+This is convenient if you're already using `pyproject.toml` for your Python
+project. The tool will automatically find and use this configuration.
+
+#### Custom Config File
+
+Specify a different config file location (bypasses automatic discovery):
+
+```bash
+ipynb-scrubber scrub-project --config-file path/to/config.toml
 ```
 
 ## Marking Cells
@@ -234,4 +333,4 @@ Apache License 2.0
 Contributions are welcome! Please feel free to submit a Pull Request, but note
 that comprehensive test coverage and clear justification for why the request
 should be considered (keeping in mind new features increase the maintenance
-burden) should be included.
+burden) must be included.

@@ -1,5 +1,6 @@
 from typing import Any, TypedDict
 
+from .config import ScrubbingOptions
 from .exceptions import InvalidNotebookError, ProcessingError
 
 
@@ -163,13 +164,12 @@ def should_clear_cell(cell: Cell, clear_tag: str) -> tuple[bool, str | None]:
     return (False, None)
 
 
-def process_cell(cell: Cell, clear_tag: str, clear_text: str) -> Cell:
+def process_cell(cell: Cell, options: ScrubbingOptions) -> Cell:
     """Process a single cell.
 
     Args:
         cell: The cell to process
-        clear_tag: Tag marking cells to clear
-        clear_text: Replacement text for cleared cells
+        options: Scrubbing options containing tags and default text
 
     Returns:
         Processed cell
@@ -179,9 +179,9 @@ def process_cell(cell: Cell, clear_tag: str, clear_text: str) -> Cell:
     cell.pop('execution_count', None)
 
     # Clear content if needed
-    should_clear, custom_text = should_clear_cell(cell, clear_tag)
+    should_clear, custom_text = should_clear_cell(cell, options.clear_tag)
     if should_clear:
-        text_to_use = custom_text if custom_text is not None else clear_text
+        text_to_use = custom_text if custom_text is not None else options.clear_text
         cell['source'] = text_to_use + '\n'
 
     return cell
@@ -189,17 +189,13 @@ def process_cell(cell: Cell, clear_tag: str, clear_text: str) -> Cell:
 
 def process_notebook(
     notebook: Notebook,
-    clear_tag: str,
-    clear_text: str,
-    omit_tag: str,
+    options: ScrubbingOptions,
 ) -> Notebook:
     """Process a notebook to create an exercise version.
 
     Args:
         notebook: The input notebook to process
-        clear_tag: Tag marking cells to clear
-        clear_text: Replacement text for cleared cells
-        omit_tag: Tag marking cells to omit entirely
+        options: Scrubbing options containing tags and default text
 
     Returns:
         Processed notebook with cleared/omitted cells and exercise metadata
@@ -212,9 +208,9 @@ def process_notebook(
 
     try:
         processed_cells = [
-            process_cell(cell, clear_tag, clear_text)
+            process_cell(cell, options)
             for cell in notebook.get('cells', [])
-            if not should_omit_cell(cell, omit_tag)
+            if not should_omit_cell(cell, options.omit_tag)
         ]
         notebook['cells'] = processed_cells
         notebook['metadata']['exercise_version'] = True
