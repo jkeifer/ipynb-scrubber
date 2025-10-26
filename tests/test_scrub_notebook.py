@@ -39,12 +39,12 @@ def test_basic_functionality(scrub_notebook, basic_notebook: Notebook) -> None:
 
     # Third cell (solution with tag) should be cleared
     assert cells[2]['cell_type'] == 'code'
-    assert cells[2]['source'] == '# TODO: Implement this\n'
+    assert cells[2]['source'] == '# TODO: Implement this'
     assert 'outputs' not in cells[2]
 
     # Fourth cell (solution with Quarto option) should be cleared
     assert cells[3]['cell_type'] == 'code'
-    assert cells[3]['source'] == '# TODO: Implement this\n'
+    assert cells[3]['source'] == '# TODO: Implement this'
 
     # Fifth cell (Quarto option false) should NOT be cleared
     assert cells[4]['cell_type'] == 'code'
@@ -65,7 +65,7 @@ def test_custom_tag(scrub_notebook, basic_notebook: Notebook) -> None:
     output = json.loads(result.stdout)
 
     # Cell with "answer" tag should be cleared
-    assert output['cells'][2]['source'] == '# TODO: Implement this\n'
+    assert output['cells'][2]['source'] == '# TODO: Implement this'
 
     # Cell with Quarto "scrub-clear" option should NOT be cleared (different tag)
     assert 'another_solution' in ''.join(output['cells'][3]['source'])
@@ -82,8 +82,8 @@ def test_custom_todo_text(scrub_notebook, basic_notebook: Notebook) -> None:
     output = json.loads(result.stdout)
 
     # Check cleared cells have custom text
-    assert output['cells'][2]['source'] == '# YOUR CODE HERE\n'
-    assert output['cells'][3]['source'] == '# YOUR CODE HERE\n'
+    assert output['cells'][2]['source'] == '# YOUR CODE HERE'
+    assert output['cells'][3]['source'] == '# YOUR CODE HERE'
 
 
 def test_no_cells_to_clear(scrub_notebook):
@@ -272,7 +272,7 @@ def test_omit_and_solution_tags(scrub_notebook):
     # Should have 2 cells: normal and solution (cleared)
     assert len(output['cells']) == 2
     assert output['cells'][0]['source'] == '# Cell 1: normal'
-    assert output['cells'][1]['source'] == '# TODO: Implement this\n'
+    assert output['cells'][1]['source'] == '# TODO: Implement this'
 
 
 def test_invalid_json_input(scrub_notebook):
@@ -376,8 +376,8 @@ def test_quarto_custom_text(scrub_notebook):
     output = json.loads(result.stdout)
 
     assert len(output['cells']) == 2
-    assert output['cells'][0]['source'] == 'Custom replacement text\n'
-    assert output['cells'][1]['source'] == '\n'
+    assert output['cells'][0]['source'] == 'Custom replacement text'
+    assert output['cells'][1]['source'] == ''
 
 
 def test_markdown_cell_clearing(scrub_notebook):
@@ -418,9 +418,9 @@ def test_markdown_cell_clearing(scrub_notebook):
     output = json.loads(result.stdout)
 
     assert len(output['cells']) == 3
-    assert output['cells'][0]['source'] == '**Your answer here**\n'
-    assert output['cells'][1]['source'] == '# TODO: Implement this\n'
-    assert output['cells'][2]['source'] == '# TODO: Implement this\n'
+    assert output['cells'][0]['source'] == '**Your answer here**'
+    assert output['cells'][1]['source'] == '# TODO: Implement this'
+    assert output['cells'][2]['source'] == '# TODO: Implement this'
 
 
 def test_raw_cell_clearing(scrub_notebook):
@@ -446,7 +446,7 @@ def test_raw_cell_clearing(scrub_notebook):
     output = json.loads(result.stdout)
 
     assert len(output['cells']) == 1
-    assert output['cells'][0]['source'] == '# TODO: Implement this\n'
+    assert output['cells'][0]['source'] == '# TODO: Implement this'
 
 
 def test_note_cell_with_file(scrub_notebook, tmp_path):
@@ -486,8 +486,9 @@ def test_note_cell_with_file(scrub_notebook, tmp_path):
     assert 'return 42' in notes_content
 
     # Check cell was cleared with reference comment
-    assert '# TODO: Implement this\n' in output['cells'][0]['source']
-    assert '# (See notes: exercise-1)' in output['cells'][0]['source']
+    assert output['cells'][0]['source'] == (
+        '# (See notes: exercise-1)\n# TODO: Implement this'
+    )
 
 
 def test_note_cell_without_file_warns(scrub_notebook):
@@ -518,8 +519,9 @@ def test_note_cell_without_file_warns(scrub_notebook):
 
     # Check cell was still cleared with reference
     output = json.loads(result.stdout)
-    assert '# TODO: Implement this\n' in output['cells'][0]['source']
-    assert '# (See notes: test-note)' in output['cells'][0]['source']
+    assert output['cells'][0]['source'] == (
+        '# (See notes: test-note)\n# TODO: Implement this'
+    )
 
 
 def test_note_cell_with_custom_replacement(scrub_notebook, tmp_path):
@@ -553,8 +555,7 @@ def test_note_cell_with_custom_replacement(scrub_notebook, tmp_path):
     output = json.loads(result.stdout)
 
     # Check custom replacement was used
-    assert '# YOUR CODE HERE\n' in output['cells'][0]['source']
-    assert '# (See notes: my-note)' in output['cells'][0]['source']
+    assert output['cells'][0]['source'] == ('# (See notes: my-note)\n# YOUR CODE HERE')
 
     # Check notes file
     notes_content = notes_file.read_text()

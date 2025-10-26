@@ -93,7 +93,7 @@ output = "{tmp_path / 'exercises' / 'lesson2.ipynb'}"
     # Check that cells were processed correctly
     assert len(nb1_out['cells']) == 2  # omit cell removed
     assert nb1_out['cells'][0]['source'] == '# Regular code'
-    assert nb1_out['cells'][1]['source'] == '# TODO: Implement this\n'
+    assert nb1_out['cells'][1]['source'] == '# TODO: Implement this'
     assert 'outputs' not in nb1_out['cells'][1]
     assert nb1_out['metadata']['exercise_version'] is True
 
@@ -125,7 +125,7 @@ output = "{tmp_path / 'output.ipynb'}"
         nb_out = json.load(f)
 
     # Check that custom clear text was used
-    assert nb_out['cells'][1]['source'] == '# YOUR CODE HERE\n'
+    assert nb_out['cells'][1]['source'] == '# YOUR CODE HERE'
 
 
 def test_file_specific_overrides(
@@ -164,12 +164,12 @@ clear-text = "# FILE SPECIFIC"
     # Check first file uses global default
     with (tmp_path / 'output1.ipynb').open() as f:
         nb1 = json.load(f)
-    assert nb1['cells'][1]['source'] == '# GLOBAL DEFAULT\n'
+    assert nb1['cells'][1]['source'] == '# GLOBAL DEFAULT'
 
     # Check second file uses file-specific override
     with (tmp_path / 'output2.ipynb').open() as f:
         nb2 = json.load(f)
-    assert nb2['cells'][1]['source'] == '# FILE SPECIFIC\n'
+    assert nb2['cells'][1]['source'] == '# FILE SPECIFIC'
 
 
 def test_custom_config_file_path(
@@ -391,8 +391,8 @@ clear-tag = "answer"
     with (tmp_path / 'output2.ipynb').open() as f:
         nb2_out = json.load(f)
 
-    assert nb1_out['cells'][0]['source'] == '# TODO: Implement this\n'
-    assert nb2_out['cells'][0]['source'] == '# TODO: Implement this\n'
+    assert nb1_out['cells'][0]['source'] == '# TODO: Implement this'
+    assert nb2_out['cells'][0]['source'] == '# TODO: Implement this'
 
 
 def test_pyproject_toml(tmp_path: Path, sample_notebook: Notebook, scrub_project):
@@ -421,7 +421,7 @@ output = "{tmp_path / 'output.ipynb'}"
         nb_out = json.load(f)
 
     # Check that pyproject.toml config was used
-    assert nb_out['cells'][1]['source'] == '# FROM PYPROJECT\n'
+    assert nb_out['cells'][1]['source'] == '# FROM PYPROJECT'
 
 
 def test_pyproject_without_ipynb_scrubber_section(tmp_path: Path, scrub_project):
@@ -510,7 +510,7 @@ output = "{tmp_path / 'output.ipynb'}"
         nb_out = json.load(f)
 
     # Should use standalone config
-    assert nb_out['cells'][1]['source'] == '# FROM STANDALONE\n'
+    assert nb_out['cells'][1]['source'] == '# FROM STANDALONE'
 
 
 def test_no_config_found(tmp_path: Path, scrub_project):
@@ -561,7 +561,7 @@ output = "{tmp_path / 'output.ipynb'}"
         nb_out = json.load(f)
 
     # Should use custom config, not discovered parent
-    assert nb_out['cells'][1]['source'] == '# FROM CUSTOM\n'
+    assert nb_out['cells'][1]['source'] == '# FROM CUSTOM'
 
 
 def test_discovery_upward_multiple_levels(

@@ -246,15 +246,15 @@ def process_cell(
         text_to_use = (
             replacement_text if replacement_text is not None else options.clear_text
         )
+        text_to_use = '\n' + text_to_use if text_to_use else ''
         # Add reference comment
-        cell['source'] = f'{text_to_use}\n# (See notes: {note_id})\n'
+        cell['source'] = f'# (See notes: {note_id}){text_to_use}'
         return cell
 
     # Clear content if needed
     should_clear, custom_text = should_clear_cell(cell, options.clear_tag)
     if should_clear:
-        text_to_use = custom_text if custom_text is not None else options.clear_text
-        cell['source'] = text_to_use + '\n'
+        cell['source'] = custom_text if custom_text is not None else options.clear_text
 
     return cell
 
