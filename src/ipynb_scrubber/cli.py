@@ -171,7 +171,7 @@ class ScrubNotebook:
                     write_notes_file(notes_dict, args.notes_file)
 
             try:
-                json.dump(processed_notebook, sys.stdout, indent=2)
+                json.dump(processed_notebook, sys.stdout, indent=1)
             except Exception as e:
                 raise ScrubberError(f'Error writing output: {e}') from e
 
@@ -260,7 +260,7 @@ class ScrubProject:
 
                     # Write output notebook
                     with file_entry.output.open('w') as f:
-                        json.dump(processed_notebook, f, indent=2)
+                        json.dump(processed_notebook, f, indent=1)
 
                     printe(f'✓ Processed: {file_entry.input} → {file_entry.output}')
 
