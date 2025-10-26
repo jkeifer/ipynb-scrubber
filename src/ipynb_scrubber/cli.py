@@ -1,6 +1,7 @@
 import argparse
 import json
 import sys
+import warnings
 
 from collections.abc import Sequence
 from typing import ClassVar, NoReturn, Protocol
@@ -8,7 +9,7 @@ from pathlib import Path
 
 from .config import ProjectConfig, ScrubbingOptions
 from .exceptions import ScrubberError
-from .processor import process_notebook
+from .processor import process_notebook, write_notes_file
 
 
 def printe(*args, **kwargs) -> None:
@@ -117,6 +118,17 @@ class ScrubNotebook:
             default='scrub-omit',
             help='Tag marking cells to omit entirely',
         )
+        parser.add_argument(
+            '--note-tag',
+            default='scrub-note',
+            help='Tag marking cells to save to notes',
+        )
+        parser.add_argument(
+            '--notes-file',
+            type=Path,
+            default=None,
+            help='Path to write notes file (for cells with note tag)',
+        )
 
     def process_args(
         self,
@@ -138,9 +150,25 @@ class ScrubNotebook:
                 clear_tag=args.clear_tag,
                 clear_text=args.clear_text,
                 omit_tag=args.omit_tag,
+                note_tag=args.note_tag,
             )
 
-            processed_notebook = process_notebook(notebook, options)
+            processed_notebook, notes_dict = process_notebook(notebook, options)
+
+            # Handle notes
+            if notes_dict:
+                if args.notes_file is None:
+                    # Warning mode: issue warning
+                    warnings.warn(
+                        f'Found {len(notes_dict)} cell(s) marked with note tag '
+                        f'"{args.note_tag}", but no --notes-file specified. '
+                        'Notes will not be saved.',
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                else:
+                    # Write notes file
+                    write_notes_file(notes_dict, args.notes_file)
 
             try:
                 json.dump(processed_notebook, sys.stdout, indent=2)
@@ -212,7 +240,20 @@ class ScrubProject:
                         ) from e
 
                     # Process the notebook
-                    processed_notebook = process_notebook(notebook, options)
+                    processed_notebook, notes_dict = process_notebook(notebook, options)
+
+                    # Handle notes (error mode)
+                    if notes_dict:
+                        if file_entry.notes_file is None:
+                            printe(
+                                f'✗ Error processing {file_entry.input}: '
+                                f'Found {len(notes_dict)} cell(s) with note tag '
+                                f'"{options.note_tag}", but no notes-file specified '
+                                'in config',
+                            )
+                            return 1
+                        # Write notes file
+                        write_notes_file(notes_dict, file_entry.notes_file)
 
                     # Ensure output directory exists
                     file_entry.output.parent.mkdir(parents=True, exist_ok=True)

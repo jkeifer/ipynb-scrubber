@@ -61,6 +61,7 @@ class ScrubbingOptions:
     clear_tag: str = 'scrub-clear'
     clear_text: str = '# TODO: Implement this'
     omit_tag: str = 'scrub-omit'
+    note_tag: str = 'scrub-note'
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -69,6 +70,7 @@ class ScrubbingOptions:
             clear_tag=data.get('clear-tag', 'scrub-clear'),
             clear_text=data.get('clear-text', '# TODO: Implement this'),
             omit_tag=data.get('omit-tag', 'scrub-omit'),
+            note_tag=data.get('note-tag', 'scrub-note'),
         )
 
 
@@ -81,6 +83,8 @@ class FileEntry:
     clear_tag: str | None = None
     clear_text: str | None = None
     omit_tag: str | None = None
+    note_tag: str | None = None
+    notes_file: Path | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -90,12 +94,15 @@ class FileEntry:
         if 'output' not in data:
             raise ScrubberError('File entry missing required field: output')
 
+        notes_file = data.get('notes-file')
         return cls(
             input=Path(data['input']),
             output=Path(data['output']),
             clear_tag=data.get('clear-tag'),
             clear_text=data.get('clear-text'),
             omit_tag=data.get('omit-tag'),
+            note_tag=data.get('note-tag'),
+            notes_file=Path(notes_file) if notes_file else None,
         )
 
     def get_options(self, global_options: ScrubbingOptions) -> ScrubbingOptions:
@@ -104,6 +111,7 @@ class FileEntry:
             clear_tag=self.clear_tag or global_options.clear_tag,
             clear_text=self.clear_text or global_options.clear_text,
             omit_tag=self.omit_tag or global_options.omit_tag,
+            note_tag=self.note_tag or global_options.note_tag,
         )
 
 

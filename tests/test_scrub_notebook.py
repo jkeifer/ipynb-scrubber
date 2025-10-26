@@ -1,6 +1,4 @@
 import json
-import subprocess
-import sys
 
 import pytest
 
@@ -9,16 +7,19 @@ from ipynb_scrubber.processor import Notebook
 
 @pytest.fixture(scope='session')
 def scrub_notebook(scrubber):
-    def inner(*args: str, input_data: str | None = None):
-        return scrubber('scrub-notebook', *args, input_data=input_data)
+    def inner(*args: str, input_data: str | None = None, **kwargs):
+        return scrubber('scrub-notebook', *args, input_data=input_data, **kwargs)
 
     return inner
 
 
 def test_basic_functionality(scrub_notebook, basic_notebook: Notebook) -> None:
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(basic_notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     # Check metadata was added
     assert output['metadata']['exercise_version'] is True
@@ -54,11 +55,14 @@ def test_custom_tag(scrub_notebook, basic_notebook: Notebook) -> None:
     # Change tag to "answer"
     basic_notebook['cells'][2]['metadata']['tags'] = ['answer']  # type: ignore
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         '--clear-tag',
         'answer',
         input_data=json.dumps(basic_notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     # Cell with "answer" tag should be cleared
     assert output['cells'][2]['source'] == '# TODO: Implement this\n'
@@ -68,11 +72,14 @@ def test_custom_tag(scrub_notebook, basic_notebook: Notebook) -> None:
 
 
 def test_custom_todo_text(scrub_notebook, basic_notebook: Notebook) -> None:
-    output = scrub_notebook(
+    result = scrub_notebook(
         '--clear-text',
         '# YOUR CODE HERE',
         input_data=json.dumps(basic_notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     # Check cleared cells have custom text
     assert output['cells'][2]['source'] == '# YOUR CODE HERE\n'
@@ -94,9 +101,12 @@ def test_no_cells_to_clear(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     # Cell should be unchanged except for cleared outputs
     assert output['cells'][0]['source'] == "print('hello')"
@@ -113,9 +123,12 @@ def test_empty_notebook(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     assert output['cells'] == []
     assert output['metadata']['exercise_version'] is True
@@ -145,9 +158,12 @@ def test_omit_tag(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     # Should only have 2 cells (omitted cell removed)
     assert len(output['cells']) == 2
@@ -174,9 +190,12 @@ def test_omit_with_quarto(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     assert len(output['cells']) == 1
     assert 'keep me' in output['cells'][0]['source']
@@ -201,11 +220,14 @@ def test_custom_omit_tag(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         '--omit-tag',
         'remove-me',
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     assert len(output['cells']) == 1
     assert output['cells'][0]['source'] == "print('keep')"
@@ -240,9 +262,12 @@ def test_omit_and_solution_tags(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     # Should have 2 cells: normal and solution (cleared)
     assert len(output['cells']) == 2
@@ -250,20 +275,17 @@ def test_omit_and_solution_tags(scrub_notebook):
     assert output['cells'][1]['source'] == '# TODO: Implement this\n'
 
 
-def test_invalid_json_input():
+def test_invalid_json_input(scrub_notebook):
     """Test handling of invalid JSON input."""
-    result = subprocess.run(
-        [sys.executable, '-m', 'ipynb_scrubber.cli', 'scrub-notebook'],
-        input='{ invalid json',
-        capture_output=True,
-        text=True,
+    result = scrub_notebook(
+        input_data='{ invalid json',
     )
 
     assert result.returncode == 1
     assert 'Error: Invalid JSON input' in result.stderr
 
 
-def test_missing_cells_field():
+def test_missing_cells_field(scrub_notebook):
     """Test handling of notebook missing cells field."""
     notebook = {
         'metadata': {},
@@ -271,11 +293,8 @@ def test_missing_cells_field():
         'nbformat_minor': 4,
     }
 
-    result = subprocess.run(
-        [sys.executable, '-m', 'ipynb_scrubber.cli', 'scrub-notebook'],
-        input=json.dumps(notebook),
-        capture_output=True,
-        text=True,
+    result = scrub_notebook(
+        input_data=json.dumps(notebook),
     )
 
     assert result.returncode == 1
@@ -283,7 +302,7 @@ def test_missing_cells_field():
     assert "missing required 'cells' field" in result.stderr
 
 
-def test_invalid_cell_type():
+def test_invalid_cell_type(scrub_notebook):
     """Test handling of invalid cell type."""
     notebook = {
         'cells': [
@@ -297,11 +316,8 @@ def test_invalid_cell_type():
         'nbformat_minor': 4,
     }
 
-    result = subprocess.run(
-        [sys.executable, '-m', 'ipynb_scrubber.cli', 'scrub-notebook'],
-        input=json.dumps(notebook),
-        capture_output=True,
-        text=True,
+    result = scrub_notebook(
+        input_data=json.dumps(notebook),
     )
 
     assert result.returncode == 1
@@ -309,7 +325,7 @@ def test_invalid_cell_type():
     assert 'invalid cell_type' in result.stderr
 
 
-def test_missing_cell_type():
+def test_missing_cell_type(scrub_notebook):
     """Test handling of cell missing cell_type field."""
     notebook = {
         'cells': [
@@ -323,11 +339,8 @@ def test_missing_cell_type():
         'nbformat_minor': 4,
     }
 
-    result = subprocess.run(
-        [sys.executable, '-m', 'ipynb_scrubber.cli', 'scrub-notebook'],
-        input=json.dumps(notebook),
-        capture_output=True,
-        text=True,
+    result = scrub_notebook(
+        input_data=json.dumps(notebook),
     )
 
     assert result.returncode == 1
@@ -355,9 +368,12 @@ def test_quarto_custom_text(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     assert len(output['cells']) == 2
     assert output['cells'][0]['source'] == 'Custom replacement text\n'
@@ -394,9 +410,12 @@ def test_markdown_cell_clearing(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
 
     assert len(output['cells']) == 3
     assert output['cells'][0]['source'] == '**Your answer here**\n'
@@ -419,9 +438,193 @@ def test_raw_cell_clearing(scrub_notebook):
         'nbformat_minor': 4,
     }
 
-    output = scrub_notebook(
+    result = scrub_notebook(
         input_data=json.dumps(notebook),
     )
 
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+
     assert len(output['cells']) == 1
     assert output['cells'][0]['source'] == '# TODO: Implement this\n'
+
+
+def test_note_cell_with_file(scrub_notebook, tmp_path):
+    """Test note cells with notes file specified."""
+
+    notes_file = tmp_path / 'notes.md'
+
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'code',
+                'source': '#| scrub-note: exercise-1\ndef solution():\n    return 42',
+                'metadata': {},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    result = scrub_notebook(
+        '--notes-file',
+        str(notes_file),
+        input_data=json.dumps(notebook),
+    )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+
+    # Check notes file was created
+    assert notes_file.exists()
+
+    # Check note content with note ID
+    notes_content = notes_file.read_text()
+    assert '## exercise-1' in notes_content
+    assert 'def solution():' in notes_content
+    assert 'return 42' in notes_content
+
+    # Check cell was cleared with reference comment
+    assert '# TODO: Implement this\n' in output['cells'][0]['source']
+    assert '# (See notes: exercise-1)' in output['cells'][0]['source']
+
+
+def test_note_cell_without_file_warns(scrub_notebook):
+    """Test that note cells without notes file issue a warning."""
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'code',
+                'source': '#| scrub-note: test-note\ndef solution():\n    return 42',
+                'metadata': {},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    result = scrub_notebook(
+        input_data=json.dumps(notebook),
+    )
+
+    # Should succeed with warning
+    assert result.returncode == 0
+
+    # Check for warning in stderr
+    assert 'scrub-note' in result.stderr
+    assert 'no --notes-file specified' in result.stderr
+
+    # Check cell was still cleared with reference
+    output = json.loads(result.stdout)
+    assert '# TODO: Implement this\n' in output['cells'][0]['source']
+    assert '# (See notes: test-note)' in output['cells'][0]['source']
+
+
+def test_note_cell_with_custom_replacement(scrub_notebook, tmp_path):
+    """Test note cells with custom replacement text."""
+
+    notes_file = tmp_path / 'notes.md'
+
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'code',
+                'source': (
+                    '#| scrub-note: my-note | '
+                    '# YOUR CODE HERE\ndef solution():\n    return 42'
+                ),
+                'metadata': {},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    result = scrub_notebook(
+        '--notes-file',
+        str(notes_file),
+        input_data=json.dumps(notebook),
+    )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+
+    # Check custom replacement was used
+    assert '# YOUR CODE HERE\n' in output['cells'][0]['source']
+    assert '# (See notes: my-note)' in output['cells'][0]['source']
+
+    # Check notes file
+    notes_content = notes_file.read_text()
+    assert '## my-note' in notes_content
+
+
+def test_note_cell_without_id_skipped(scrub_notebook, tmp_path):
+    """Test that note cells without IDs are skipped."""
+
+    notes_file = tmp_path / 'notes.md'
+
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'code',
+                'source': '#| scrub-note\ndef solution():\n    return 42',
+                'metadata': {},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    result = scrub_notebook(
+        '--notes-file',
+        str(notes_file),
+        input_data=json.dumps(notebook),
+    )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+
+    # Cell should not be cleared (no ID provided)
+    assert 'def solution():' in output['cells'][0]['source']
+    assert 'return 42' in output['cells'][0]['source']
+
+    # Notes file should not be created (no valid notes)
+    assert not notes_file.exists()
+
+
+def test_note_cell_non_code_ignored(scrub_notebook, tmp_path):
+    """Test that note tag on non-code cells is ignored."""
+
+    notes_file = tmp_path / 'notes.md'
+
+    notebook = {
+        'cells': [
+            {
+                'cell_type': 'markdown',
+                'source': '<!-- scrub-note: md-note -->\n## Solution',
+                'metadata': {},
+            },
+        ],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+
+    result = scrub_notebook(
+        '--notes-file',
+        str(notes_file),
+        input_data=json.dumps(notebook),
+    )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+
+    # Markdown cell should not be touched
+    assert '## Solution' in output['cells'][0]['source']
+
+    # Notes file should not be created (markdown not supported)
+    assert not notes_file.exists()

@@ -1,4 +1,3 @@
-import json
 import subprocess
 import sys
 
@@ -12,21 +11,19 @@ def scrubber():
     def inner(
         *args: str,
         input_data: str | None = None,
+        **kwargs,
     ):
         cmd = [sys.executable, '-m', 'ipynb_scrubber.cli']
         cmd.extend(args)
 
-        result = subprocess.run(
+        kwargs['input'] = input_data
+        kwargs['capture_output'] = True
+        kwargs['text'] = True
+
+        return subprocess.run(
             cmd,
-            input=input_data,
-            capture_output=True,
-            text=True,
+            **kwargs,
         )
-
-        if result.returncode != 0:
-            raise RuntimeError(f'Command failed: {result.stderr}')
-
-        return json.loads(result.stdout)
 
     return inner
 
