@@ -126,6 +126,24 @@ class FileEntry:
         {'input', 'output', 'notes-file'},
     )
 
+    def __post_init__(self) -> None:
+        """Enforce that ``overrides`` is keyed by ScrubbingOptions field names.
+
+        ``from_dict`` is the normal construction path and always satisfies
+        this, but the invariant is what makes ``get_options`` safe. Checking
+        it here means a direct construction with a bad key fails immediately
+        with a clear error, rather than a ``TypeError`` raised from inside
+        ``dataclasses.replace`` at merge time.
+
+        Raises:
+            ScrubberError: If an override is not a ScrubbingOptions field.
+        """
+        reject_unknown_keys(
+            self.overrides,
+            set(ScrubbingOptions.KEYS.values()),
+            'file entry override',
+        )
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         """Create FileEntry from dictionary.
