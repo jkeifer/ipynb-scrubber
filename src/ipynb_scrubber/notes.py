@@ -2,13 +2,7 @@ from pathlib import Path
 
 from .exceptions import ProcessingError
 
-#: Fence info string used when the notebook's kernel language is unknown.
-#:
-#: Notes are only ever captured from code cells, so the right value is the
-#: notebook's kernel language (``metadata.kernelspec.language``). That is not
-#: plumbed this far: ``process_notebook`` returns only ``dict[str, str]``, so
-#: changing it is an API decision, not a local fix. Until then this is the
-#: honest default rather than a silent assumption buried in an f-string.
+#: Fence info string for notebooks that declare no kernel language.
 DEFAULT_NOTE_LANGUAGE = 'python'
 
 

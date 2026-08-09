@@ -14,15 +14,34 @@ class Cell(TypedDict, total=False):
 class Notebook(TypedDict, total=False):
     """A notebook, as far as this tool is concerned.
 
-    Only ``cells`` is required, because only ``cells`` is what
-    :func:`validate_notebook` insists on and what the processor cannot work
-    without. Everything else is carried through untouched when present.
+    ``cells`` is the only required key, and ``cells`` and ``metadata`` are the
+    only two this tool reads; :func:`validate_notebook` checks the shape of
+    both. ``nbformat`` and ``nbformat_minor`` are declared because notebooks
+    carry them, but they are never inspected. Keys absent from this definition
+    ride along untouched.
     """
 
     cells: Required[list[Cell]]
     metadata: dict[str, Any]
     nbformat: int
     nbformat_minor: int
+
+
+def get_notebook_language(notebook: Notebook) -> str | None:
+    """Return the notebook's programming language, if it declares one.
+
+    Jupyter records this in either ``metadata.language_info.name`` or
+    ``metadata.kernelspec.language``; the former is written by the kernel that
+    actually ran and so is preferred. Either may be missing or malformed, in
+    which case the caller supplies its own default.
+    """
+    metadata = notebook.get('metadata', {})
+    for section, key in (('language_info', 'name'), ('kernelspec', 'language')):
+        value = metadata.get(section, {})
+        if isinstance(value, dict) and isinstance(value.get(key), str):
+            language: str = value[key]
+            return language
+    return None
 
 
 def get_cell_source(cell: Cell) -> str:
@@ -102,6 +121,11 @@ def validate_notebook(notebook: Any) -> Notebook:
 
     if not isinstance(notebook.get('cells'), list):
         raise InvalidNotebookError("Notebook 'cells' field must be a list")
+
+    if 'metadata' in notebook and not isinstance(notebook['metadata'], dict):
+        raise InvalidNotebookError(
+            "Notebook has invalid 'metadata' field: must be an object",
+        )
 
     for i, cell in enumerate(notebook['cells']):
         _validate_cell(i, cell)

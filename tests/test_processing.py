@@ -47,22 +47,25 @@ def test_error_is_prefixed_with_the_offending_cell_index():
         process_notebook(nb, OPTS)
 
 
-def test_internal_bug_surfaces_as_a_bug_not_a_processing_error():
-    """A malformed notebook that passes validate_notebook but breaks internal
+def test_internal_bug_surfaces_as_a_bug_not_a_processing_error(
+    monkeypatch,
+    make_notebook,
+    code,
+):
+    """Only ScrubberError carries the friendly, traceback-free contract.
 
-    assumptions (top-level metadata as a string, not a dict) must not be
-    laundered into a ProcessingError: that would hide a real bug behind the
-    user-friendly, traceback-free error contract. validate_notebook checks
-    cell shape, not the notebook's own top-level metadata field, so this
-    still reaches the bug.
+    Anything else escaping cell processing is a defect in this tool, and
+    wrapping it in ProcessingError would present it to the user as though
+    their notebook were at fault.
     """
-    nb = {
-        'cells': [{'cell_type': 'code', 'source': 'x = 1', 'metadata': {}}],
-        'metadata': 'oops',
-        'nbformat': 4,
-        'nbformat_minor': 4,
-    }
-    with pytest.raises(TypeError):
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError('internal invariant violated')
+
+    monkeypatch.setattr('ipynb_scrubber.processor.decide', boom)
+
+    nb = make_notebook(code('x = 1'))
+    with pytest.raises(RuntimeError, match='internal invariant violated'):
         process_notebook(nb, OPTS)
 
 
@@ -772,3 +775,23 @@ def test_note_metadata_tag_with_custom_tag_errors(make_notebook, code):
         match="Option 'keepme' is not supported as a cell tag",
     ):
         process_notebook(nb, opts)
+
+
+def test_non_object_notebook_metadata_is_rejected():
+    """Malformed top-level metadata is bad input, not an internal bug.
+
+    The processor merges ``exercise_version`` into this mapping, so a
+    non-object here would otherwise surface as a TypeError traceback.
+    """
+    for bad in (None, 'oops', 42, []):
+        with pytest.raises(
+            InvalidNotebookError,
+            match="Notebook has invalid 'metadata' field",
+        ):
+            process_notebook({'cells': [], 'metadata': bad}, OPTS)
+
+
+def test_notebook_without_metadata_is_accepted(code):
+    """metadata is optional; the processor supplies it."""
+    result, _ = process_notebook({'cells': [code('x = 1')]}, OPTS)
+    assert result['metadata'] == {'exercise_version': True}
