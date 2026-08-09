@@ -7,14 +7,6 @@ import pytest
 from ipynb_scrubber.processor import Notebook
 
 
-@pytest.fixture(scope='session')
-def scrub_project(scrubber):
-    def inner(*args: str, input_data: str | None = None, **kwargs):
-        return scrubber('scrub-project', *args, input_data=input_data, **kwargs)
-
-    return inner
-
-
 @pytest.fixture
 def sample_notebook() -> Notebook:
     """Create a sample notebook with solution cells."""
@@ -280,6 +272,23 @@ output = "{tmp_path / 'output.ipynb'}"
 
     assert result.returncode == 1
     assert 'Invalid JSON' in result.stderr
+
+
+def test_input_that_is_a_directory_reports_os_error(tmp_path: Path, scrub_project):
+    """The input path exists but can't be opened as a file (IsADirectoryError)."""
+    input_dir = tmp_path / 'in.ipynb'
+    input_dir.mkdir()
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{input_dir}"
+output = "{tmp_path / 'output.ipynb'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert f'Error reading {input_dir}' in result.stderr
 
 
 def test_output_directory_creation(
@@ -840,3 +849,34 @@ output = "{out_path}"
         output = json.load(f)
 
     assert output['cells'][1]['source'] == 'def add(a, b):\n    # TODO\n    pass'
+
+
+def test_file_entry_empty_clear_text_reaches_the_processor(tmp_path, scrub_project):
+    """A file-level clear-text override of '' merges through, not the default."""
+    notebook = tmp_path / 'in.ipynb'
+    notebook.write_text(
+        json.dumps(
+            {
+                'cells': [
+                    {
+                        'cell_type': 'code',
+                        'metadata': {},
+                        'source': '#| scrub-clear\nx = 1',
+                    },
+                ],
+                'metadata': {},
+                'nbformat': 4,
+                'nbformat_minor': 4,
+            },
+        ),
+    )
+    out = tmp_path / 'out.ipynb'
+    config = tmp_path / '.ipynb-scrubber.toml'
+    config.write_text(
+        f'[[files]]\ninput = "{notebook}"\noutput = "{out}"\nclear-text = ""\n',
+    )
+
+    result = scrub_project('--config-file', str(config))
+
+    assert result.returncode == 0
+    assert json.loads(out.read_text())['cells'][0]['source'] == ''

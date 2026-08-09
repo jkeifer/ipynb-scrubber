@@ -1,3 +1,4 @@
+import functools
 import subprocess
 import sys
 
@@ -26,6 +27,49 @@ def scrubber():
         )
 
     return inner
+
+
+@pytest.fixture
+def scrub_notebook(scrubber):
+    return functools.partial(scrubber, 'scrub-notebook')
+
+
+@pytest.fixture
+def scrub_project(scrubber):
+    return functools.partial(scrubber, 'scrub-project')
+
+
+@pytest.fixture
+def make_notebook():
+    """Build a notebook from cell dicts, filling in the boilerplate."""
+
+    def inner(*cells: dict, metadata: dict | None = None) -> Notebook:
+        return {
+            'cells': [{'metadata': {}, **cell} for cell in cells],
+            'metadata': {} if metadata is None else metadata,
+            'nbformat': 4,
+            'nbformat_minor': 4,
+        }
+
+    return inner
+
+
+@pytest.fixture
+def code():
+    """Build a code cell."""
+    return lambda source, **kw: {'cell_type': 'code', 'source': source, **kw}
+
+
+@pytest.fixture
+def markdown():
+    """Build a markdown cell."""
+    return lambda source, **kw: {'cell_type': 'markdown', 'source': source, **kw}
+
+
+@pytest.fixture
+def raw():
+    """Build a raw cell."""
+    return lambda source, **kw: {'cell_type': 'raw', 'source': source, **kw}
 
 
 @pytest.fixture
