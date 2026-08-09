@@ -276,7 +276,7 @@ def test_markdown_block_unterminated_message_does_not_claim_an_option() -> None:
         ],
     )
     expected = (
-        "Unterminated block in cell option header ('schedule'): "
+        'Unterminated block in cell option header: '
         "expected a line containing only '-->'"
     )
     with pytest.raises(ProcessingError, match=re.escape(expected)):
@@ -337,3 +337,46 @@ def test_option_single_text_rejects_inline_plus_block():
     option = Option(name='scrub-clear', raw_inline='hello', block='body')
     with pytest.raises(ProcessingError, match=r'scrub-clear'):
         option.single_text()
+
+
+def test_tab_indented_block_content_is_collected():
+    options = parse_cell_options(
+        'code',
+        '#| scrub-clear: |\n#|\tdef add(a, b):\n#|\t    pass',
+    )
+    assert options['scrub-clear'].block == 'def add(a, b):\n    pass'
+
+
+def test_block_opener_followed_by_code_is_an_empty_block():
+    options = parse_cell_options('code', '#| scrub-note: ex-1 |\nSECRET = 1')
+    assert options['scrub-note'].block == ''
+
+
+def test_empty_block_opener_then_sibling_option_parses_both():
+    """The syntax layer stays neutral here; ambiguity is policy's problem.
+
+    An under-indented '#|' line after an empty block opener is genuinely
+    indistinguishable from a sibling option, so the parser does not guess.
+    Task 4's one-scrubber-option-per-header rule catches the dangerous case.
+    """
+    options = parse_cell_options('code', '#| scrub-note: ex-1 |\n#| echo: false')
+    assert options['scrub-note'].block == ''
+    assert options['echo'].inline == 'false'
+
+
+def test_block_with_content_then_sibling_option_still_parses_both():
+    options = parse_cell_options(
+        'code',
+        '#| scrub-clear: |\n#|   line one\n#| scrub-omit',
+    )
+    assert options['scrub-clear'].block == 'line one'
+    assert 'scrub-omit' in options
+
+
+def test_duplicate_option_name_errors():
+    with pytest.raises(ProcessingError, match=r'[Dd]uplicate'):
+        parse_cell_options('code', '#| scrub-clear: first\n#| scrub-clear: second')
+
+
+def test_dedent_block_strips_leading_and_trailing_blanks():
+    assert dedent_block(['', '  a', '  b', '']) == 'a\nb'
