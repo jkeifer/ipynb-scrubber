@@ -7,6 +7,7 @@ import json
 from typing import TYPE_CHECKING
 
 from .exceptions import ScrubberError
+from .notebook import get_notebook_language
 from .notes import write_notes_file
 from .processor import process_notebook
 
@@ -61,4 +62,4 @@ def scrub_file(entry: FileEntry) -> None:
         raise ScrubberError(f'Error writing {entry.output}: {e}') from e
 
     if notes and notes_file is not None:
-        write_notes_file(notes, notes_file)
+        write_notes_file(notes, notes_file, get_notebook_language(processed_notebook))

@@ -9,19 +9,21 @@ DEFAULT_NOTE_LANGUAGE = 'python'
 def write_notes_file(
     notes_dict: dict[str, str],
     output_path: Path,
-    language: str = DEFAULT_NOTE_LANGUAGE,
+    language: str | None = None,
 ) -> None:
     """Write collected cell notes to a Markdown file.
 
     Args:
         notes_dict: Map of note_id -> content.
         output_path: Path where notes file will be written
-        language: Fence info string for the note bodies, i.e. the notebook's
-            kernel language. Defaults to :data:`DEFAULT_NOTE_LANGUAGE`.
+        language: Fence info string for the note bodies, i.e. the language the
+            noted cells are written in. ``None`` for a notebook that declares
+            none, which falls back to :data:`DEFAULT_NOTE_LANGUAGE`.
 
     Raises:
         ProcessingError: If an error occurs while writing notes
     """
+    fence = language or DEFAULT_NOTE_LANGUAGE
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -34,7 +36,7 @@ def write_notes_file(
 
             for note_id, content in notes_dict.items():
                 f.write(f'## {note_id}\n\n')
-                f.write(f'```{language}\n')
+                f.write(f'```{fence}\n')
                 f.write(content)
                 if not content.endswith('\n'):
                     f.write('\n')

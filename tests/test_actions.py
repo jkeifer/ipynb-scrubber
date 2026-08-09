@@ -70,9 +70,9 @@ def test_multiple_scrubber_options_catches_underindented_block_content():
     """The F5 hazard: block content that lost its indentation.
 
     '#| scrub-omit' here is indistinguishable from a sibling option at the
-    syntax level, and silently deleted the cell before this rule existed.
-    A block is present here, so the indentation hint is relevant and must
-    be appended.
+    syntax level, and reading it as one would silently delete the cell. A
+    block is present, so the indentation hint is relevant and must be
+    appended.
     """
     with pytest.raises(ProcessingError, match=r'only one .* option per cell') as exc:
         decide(cell('#| scrub-clear: |\n#| scrub-omit\nSECRET = 1'), OPTS)

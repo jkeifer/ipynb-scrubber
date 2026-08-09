@@ -9,6 +9,7 @@ from typing import Any, ClassVar, NoReturn, Protocol
 
 from .config import ProjectConfig, ScrubbingOptions
 from .exceptions import ScrubberError
+from .notebook import get_notebook_language
 from .notes import write_notes_file
 from .processor import process_notebook
 from .project import scrub_file
@@ -125,7 +126,9 @@ class ScrubNotebook:
                 notebook = json.load(sys.stdin)
             except json.JSONDecodeError as e:
                 raise ScrubberError(f'Invalid JSON input: {e}') from e
-            except OSError as e:
+            except (OSError, UnicodeDecodeError) as e:
+                # A mis-encoded byte on stdin is bad input like any other, so
+                # it earns the friendly contract rather than a traceback.
                 raise ScrubberError(f'Error reading input: {e}') from e
 
             options = ScrubbingOptions(
@@ -137,10 +140,8 @@ class ScrubNotebook:
 
             processed_notebook, notes_dict = process_notebook(notebook, options)
 
-            # Handle notes
             if notes_dict:
                 if args.notes_file is None:
-                    # Warning mode: issue warning
                     warnings.warn(
                         f'Found {len(notes_dict)} cell(s) marked with note tag '
                         f'"{args.note_tag}", but no --notes-file specified. '
@@ -149,8 +150,11 @@ class ScrubNotebook:
                         stacklevel=2,
                     )
                 else:
-                    # Write notes file
-                    write_notes_file(notes_dict, args.notes_file)
+                    write_notes_file(
+                        notes_dict,
+                        args.notes_file,
+                        get_notebook_language(processed_notebook),
+                    )
 
             try:
                 json.dump(processed_notebook, sys.stdout, indent=1)
