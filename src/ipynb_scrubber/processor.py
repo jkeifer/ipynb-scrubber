@@ -2,7 +2,8 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from .config import ScrubbingOptions
-from .exceptions import InvalidNotebookError, ProcessingError
+from .exceptions import InvalidNotebookError, ProcessingError, ScrubberError
+from .options import Option, parse_cell_options
 
 
 class Cell(TypedDict, total=False):
@@ -20,71 +21,12 @@ class Notebook(TypedDict):
     nbformat_minor: int
 
 
-def get_option_value(cell: Cell, option: str) -> tuple[bool, str | None]:
-    """Get the value of a cell clearing option from a notebook cell.
-
-    Uses cell-type-appropriate syntax:
-    - Code cells: Quarto options (#| option: value)
-    - Markdown cells: HTML comments (<!-- option: value -->)
-    - Raw cells: Not supported (use metadata tags only)
-
-    Args:
-        cell: A notebook cell dictionary containing cell_type and source
-        option: The option name to check for
-
-    Returns:
-        Tuple of (enabled, custom_text):
-        - (False, None): option not present
-        - (True, None): option present, use default text
-        - (True, str): option present with custom text (including empty string)
-
-    Example:
-        >>> cell = {
-        ...     'cell_type': 'code',
-        ...     'source': '#| scrub-clear\\nprint("hello")',
-        ... }
-        >>> get_option_value(cell, 'scrub-clear')
-        (True, None)
-        >>> cell = {
-        ...     'cell_type': 'markdown',
-        ...     'source': '<!-- scrub-clear: Custom text -->\\n## Question',
-        ... }
-        >>> get_option_value(cell, 'scrub-clear')
-        (True, 'Custom text')
-    """
-    cell_type = cell.get('cell_type')
-
-    if cell_type == 'code':
-        start_marker = '#|'
-        end_suffix = ''
-    elif cell_type == 'markdown':
-        start_marker = '<!--'
-        end_suffix = '-->'
-    else:
-        # Other cell types (raw) do not support options
-        return (False, None)
-
+def get_cell_source(cell: Cell) -> str:
+    """Return a cell's source as a single string."""
     source = cell.get('source', '')
     if isinstance(source, list):
         source = ''.join(source)
-
-    lines = source.split('\n')
-    for line in lines:
-        trimmed = line.strip()
-        if trimmed.startswith(start_marker):
-            # Extract the option part
-            option_part = trimmed[len(start_marker) :].removesuffix(end_suffix).strip()
-            if ':' in option_part:
-                key, value = option_part.split(':', 1)
-                if key.strip() == option:
-                    return (True, value.lstrip())
-            else:
-                if option_part == option:
-                    return (True, None)
-        elif trimmed and not trimmed.startswith(start_marker):
-            break
-
-    return (False, None)
+    return source
 
 
 def validate_notebook(notebook: Any) -> None:
@@ -123,26 +65,35 @@ def validate_notebook(notebook: Any) -> None:
             )
 
 
-def should_omit_cell(cell: Cell, omit_tag: str) -> bool:
+def should_omit_cell(
+    cell: Cell,
+    options: dict[str, Option],
+    omit_tag: str,
+) -> bool:
     """Check if a cell should be omitted from the output.
 
     Args:
         cell: The cell to check
+        options: Parsed source-based options for this cell
         omit_tag: Tag marking cells to omit
 
     Returns:
         True if the cell should be omitted
     """
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
-    enabled, _ = get_option_value(cell, omit_tag)
-    return omit_tag in tags or enabled
+    return omit_tag in tags or omit_tag in options
 
 
-def should_clear_cell(cell: Cell, clear_tag: str) -> tuple[bool, str | None]:
+def should_clear_cell(
+    cell: Cell,
+    options: dict[str, Option],
+    clear_tag: str,
+) -> tuple[bool, str | None]:
     """Check if a cell's content should be cleared and get custom text if any.
 
     Args:
         cell: The cell to check
+        options: Parsed source-based options for this cell
         clear_tag: Tag marking cells to clear
 
     Returns:
@@ -150,14 +101,19 @@ def should_clear_cell(cell: Cell, clear_tag: str) -> tuple[bool, str | None]:
         - (False, None): don't clear
         - (True, None): clear with default text
         - (True, str): clear with custom text
-    """
-    # Check source-based options for code and markdown cells (supports custom text)
-    if cell.get('cell_type') in ['code', 'markdown']:
-        enabled, custom_text = get_option_value(cell, clear_tag)
-        if enabled:
-            return (True, custom_text)
 
-    # Check cell tags as fallback for all cell types (no custom text support)
+    Raises:
+        ProcessingError: If the option combines inline text with a block
+    """
+    option = options.get(clear_tag)
+    if option is not None:
+        if option.block is not None and option.inline:
+            raise ProcessingError(
+                f"Option '{clear_tag}' has both inline text and a block; "
+                'use one or the other',
+            )
+        return (True, option.value)
+
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
     if clear_tag in tags:
         return (True, None)
@@ -167,107 +123,133 @@ def should_clear_cell(cell: Cell, clear_tag: str) -> tuple[bool, str | None]:
 
 def should_note_cell(
     cell: Cell,
+    options: dict[str, Option],
     note_tag: str,
 ) -> tuple[bool, tuple[str, str | None] | None]:
     """Check if a cell's content should be saved to notes.
 
-    Note cells are only supported for code cells. The note tag requires an ID.
+    Note cells are only supported for code cells, and only via source-based
+    options: the note tag requires an id, which a Jupyter metadata tag cannot
+    carry.
 
     Args:
         cell: The cell to check
+        options: Parsed source-based options for this cell
         note_tag: Tag marking cells to save to notes
 
     Returns:
         Tuple of (should_note, (note_id, replacement_text) | None):
         - (False, None): don't note
-        - (True, (note_id, None)): note with ID, use default replacement text
-        - (True, (note_id, text)): note with ID and custom replacement text
+        - (True, (note_id, None)): note with id, use default replacement text
+        - (True, (note_id, text)): note with id and custom replacement text
 
     Note tag format:
+        #| scrub-note: note-id
         #| scrub-note: note-id | replacement text
-        - note-id is required
-        - replacement text is optional (separated by |)
+        #| scrub-note: note-id |      (replacement text from the block below)
+
+    The id is split from the replacement on the first pipe. A block, when
+    present, always supplies the replacement and never the id.
+
+    Raises:
+        ProcessingError: If the note tag is present as a cell tag, on a
+            non-code cell, without a usable id, or combining inline replacement
+            text with a block
     """
-    # Only support notes for code cells
-    if cell.get('cell_type') != 'code':
+    tags: list[str] = cell.get('metadata', {}).get('tags', [])
+    if note_tag in tags:
+        raise ProcessingError(
+            f"Option '{note_tag}' is not supported as a cell tag; "
+            f"write '#| {note_tag}: <id>' in a code cell's source",
+        )
+
+    option = options.get(note_tag)
+    if option is None:
         return (False, None)
 
-    # Check source-based options
-    enabled, custom_text = get_option_value(cell, note_tag)
-    if enabled:
-        if custom_text is None:
-            # No ID provided, skip this cell
-            return (False, None)
+    if cell.get('cell_type', '') != 'code':
+        raise ProcessingError(
+            f"Option '{note_tag}' is only supported on code cells",
+        )
 
-        # Parse the custom_text to extract note_id and optional replacement
-        # Format: "note-id | replacement" or just "note-id"
-        if ' | ' in custom_text:
-            parts = custom_text.split(' | ', 1)
-            note_id = parts[0].strip()
-            replacement = parts[1].strip() if len(parts) > 1 else None
-        else:
-            note_id = custom_text.strip()
-            replacement = None
+    inline = option.inline or ''
+    note_id, separator, remainder = inline.partition('|')
+    note_id = note_id.strip()
 
-        if not note_id:
-            # Empty ID, skip
-            return (False, None)
+    if not note_id:
+        raise ProcessingError(
+            f"Option '{note_tag}' requires an id, e.g. '{note_tag}: exercise-1'",
+        )
 
-        return (True, (note_id, replacement))
+    if option.block is not None:
+        if separator and remainder.strip():
+            raise ProcessingError(
+                f"Option '{note_tag}' has both inline text and a block; "
+                'use one or the other',
+            )
+        replacement: str | None = option.block
+    elif separator:
+        replacement = remainder.strip()
+    else:
+        replacement = None
 
-    # Check cell tags (also requires ID, but tags don't support it)
-    # So we skip tag-based notes
-    return (False, None)
+    return (True, (note_id, replacement))
 
 
 def process_cell(
     cell: Cell,
-    options: ScrubbingOptions,
+    cell_options: dict[str, Option],
+    scrub_options: ScrubbingOptions,
     note_info: tuple[str, str | None] | None = None,
 ) -> Cell:
     """Process a single cell.
 
     Args:
         cell: The cell to process
-        options: Scrubbing options containing tags and default text
-        note_info: Optional tuple of (note_id, replacement_text) if this is a note cell
+        cell_options: Parsed source-based options for this cell
+        scrub_options: Scrubbing options containing tags and default text
+        note_info: Optional tuple of (note_id, replacement_text) if this is a
+            note cell
 
     Returns:
         Processed cell
     """
-    # Clear outputs and execution count
     cell.pop('outputs', None)
     cell.pop('execution_count', None)
 
-    # Check if this is a note cell
     if note_info is not None:
         note_id, replacement_text = note_info
-        # Use custom replacement or default
         text_to_use = (
-            replacement_text if replacement_text is not None else options.clear_text
+            replacement_text
+            if replacement_text is not None
+            else scrub_options.clear_text
         )
         text_to_use = '\n' + text_to_use if text_to_use else ''
-        # Add reference comment
         cell['source'] = f'# (See notes: {note_id}){text_to_use}'
         return cell
 
-    # Clear content if needed
-    should_clear, custom_text = should_clear_cell(cell, options.clear_tag)
+    should_clear, custom_text = should_clear_cell(
+        cell,
+        cell_options,
+        scrub_options.clear_tag,
+    )
     if should_clear:
-        cell['source'] = custom_text if custom_text is not None else options.clear_text
+        cell['source'] = (
+            custom_text if custom_text is not None else scrub_options.clear_text
+        )
 
     return cell
 
 
 def process_notebook(
     notebook: Notebook,
-    options: ScrubbingOptions,
+    scrub_options: ScrubbingOptions,
 ) -> tuple[Notebook, dict[str, tuple[str, str]]]:
     """Process a notebook to create an exercise version.
 
     Args:
         notebook: The input notebook to process
-        options: Scrubbing options containing tags and default text
+        scrub_options: Scrubbing options containing tags and default text
 
     Returns:
         Tuple of (processed_notebook, notes_dict) where:
@@ -284,33 +266,41 @@ def process_notebook(
         notes_dict: dict[str, tuple[str, str]] = {}
         processed_cells = []
 
-        for cell in notebook.get('cells', []):
-            # Skip omitted cells
-            if should_omit_cell(cell, options.omit_tag):
-                continue
+        for index, cell in enumerate(notebook.get('cells', [])):
+            try:
+                cell_options = parse_cell_options(
+                    cell.get('cell_type', ''),
+                    get_cell_source(cell),
+                )
 
-            # Check if cell should be noted - capture BEFORE processing
-            should_note, note_info = should_note_cell(cell, options.note_tag)
-            if should_note and note_info is not None:
-                note_id, _ = note_info
+                if should_omit_cell(cell, cell_options, scrub_options.omit_tag):
+                    continue
 
-                # Get cell type and source (original, before clearing)
-                cell_type = cell.get('cell_type', 'code')
-                source = cell.get('source', '')
-                if isinstance(source, list):
-                    source = ''.join(source)
-
-                # Store note with note_id as key
-                notes_dict[note_id] = (cell_type, source)
-
-                # Process cell with note info to add reference comment
-                processed_cells.append(process_cell(cell, options, note_info))
-            else:
-                # Process cell normally
-                processed_cells.append(process_cell(cell, options))
+                should_note, note_info = should_note_cell(
+                    cell,
+                    cell_options,
+                    scrub_options.note_tag,
+                )
+                if should_note and note_info is not None:
+                    note_id, _ = note_info
+                    notes_dict[note_id] = (
+                        cell.get('cell_type', 'code'),
+                        get_cell_source(cell),
+                    )
+                    processed_cells.append(
+                        process_cell(cell, cell_options, scrub_options, note_info),
+                    )
+                else:
+                    processed_cells.append(
+                        process_cell(cell, cell_options, scrub_options),
+                    )
+            except ScrubberError as e:
+                raise ProcessingError(f'Cell {index}: {e}') from e
 
         notebook['cells'] = processed_cells
         notebook['metadata']['exercise_version'] = True
+    except ScrubberError:
+        raise
     except Exception as e:
         raise ProcessingError(f'Error processing notebook: {e}') from e
 

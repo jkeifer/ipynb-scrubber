@@ -777,3 +777,39 @@ notes-file = "{notes_file}"
     notes_content = notes_file.read_text()
     assert '## custom-id' in notes_content
     assert 'custom_solution' in notes_content
+
+
+def test_multiline_clear_text_toml(
+    tmp_path: Path,
+    sample_notebook: Notebook,
+    scrub_project,
+):
+    """A TOML triple-quoted clear-text value survives to the output."""
+    nb_path = tmp_path / 'lesson.ipynb'
+    with nb_path.open('w') as f:
+        json.dump(sample_notebook, f)
+
+    out_path = tmp_path / 'exercise.ipynb'
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[options]
+clear-text = """
+def add(a, b):
+    # TODO
+    pass"""
+
+[[files]]
+input = "{nb_path}"
+output = "{out_path}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 0
+    assert out_path.exists()
+
+    with out_path.open() as f:
+        output = json.load(f)
+
+    assert output['cells'][1]['source'] == 'def add(a, b):\n    # TODO\n    pass'
