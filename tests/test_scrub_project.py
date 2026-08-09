@@ -7,6 +7,8 @@ import pytest
 
 from ipynb_scrubber import project
 from ipynb_scrubber.cli import ScrubProject
+from ipynb_scrubber.config import FileEntry
+from ipynb_scrubber.exceptions import ScrubberError
 
 
 @pytest.fixture
@@ -399,11 +401,7 @@ def test_note_cells_without_notes_file_fails(
     sample_notebook,
     scrub_project,
 ):
-    """A config-driven run with note cells but no notes-file is a hard error.
-
-    Distinct from scrub-notebook's warn-and-continue behaviour: scrub-project
-    has no stdout stream to fall back to, so an unsaved note is fatal.
-    """
+    """A config-driven run with note cells but no notes-file is a hard error."""
     sample_notebook['cells'].append(
         {
             'cell_type': 'code',
@@ -487,6 +485,202 @@ notes-file = "{notes_file}"
 
     assert result.returncode == 1
     assert not notes_file.exists()
+
+
+@pytest.fixture
+def note_cell():
+    """A code cell that is captured to the notes file under ``note-1``."""
+    return {
+        'cell_type': 'code',
+        'source': '#| scrub-note: note-1\nsecret = 1',
+        'metadata': {},
+    }
+
+
+def test_failing_entry_cancels_the_whole_batch(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """The batch is all-or-nothing: one bad entry writes none of the outputs.
+
+    The failing entry sits between two good ones, so this pins down both
+    directions: the entry staged before it is thrown away, and the entry after
+    it is never reached.
+    """
+    out_dir = tmp_path / 'out'
+    first_input = tmp_path / 'first.ipynb'
+    last_input = tmp_path / 'last.ipynb'
+    write(first_input, sample_notebook)
+    write(last_input, sample_notebook)
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{first_input}"
+output = "{out_dir / 'first.ipynb'}"
+
+[[files]]
+input = "{tmp_path / 'missing.ipynb'}"
+output = "{out_dir / 'middle.ipynb'}"
+
+[[files]]
+input = "{last_input}"
+output = "{out_dir / 'last.ipynb'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert 'Input file not found' in result.stderr
+    # Nothing succeeded, so nothing is reported as processed.
+    assert '✓' not in result.stderr
+    # The directory is made in order to stage into it, and is left empty:
+    # no outputs, and no temporary files either.
+    assert out_dir.is_dir()
+    assert list(out_dir.iterdir()) == []
+
+
+def test_successful_batch_commits_every_file(
+    tmp_path: Path,
+    sample_notebook,
+    note_cell,
+    scrub_project,
+):
+    """Every configured output lands, and no temporary file is left behind."""
+    out_dir = tmp_path / 'out'
+    first_input = tmp_path / 'first.ipynb'
+    last_input = tmp_path / 'last.ipynb'
+    write(first_input, sample_notebook)
+    with_note = {**sample_notebook, 'cells': [*sample_notebook['cells'], note_cell]}
+    write(last_input, with_note)
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{first_input}"
+output = "{out_dir / 'first.ipynb'}"
+
+[[files]]
+input = "{last_input}"
+output = "{out_dir / 'last.ipynb'}"
+notes-file = "{out_dir / 'notes.md'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 0
+    assert result.stderr.count('✓ Processed') == 2
+    assert sorted(p.name for p in out_dir.iterdir()) == [
+        'first.ipynb',
+        'last.ipynb',
+        'notes.md',
+    ]
+    assert '## note-1' in (out_dir / 'notes.md').read_text()
+
+
+def test_unwritable_notes_file_leaves_the_notebook_uncommitted(
+    tmp_path: Path,
+    sample_notebook,
+    note_cell,
+    scrub_project,
+):
+    """A notebook and its notes are committed together or not at all."""
+    sample_notebook['cells'].append(note_cell)
+    input_path = tmp_path / 'input.ipynb'
+    write(input_path, sample_notebook)
+
+    # A regular file where the notes file's parent directory should be, so
+    # the notes cannot be staged even though the notebook already is.
+    blocker = tmp_path / 'blocker'
+    blocker.write_text('not a directory')
+
+    out_dir = tmp_path / 'out'
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{input_path}"
+output = "{out_dir / 'out.ipynb'}"
+notes-file = "{blocker / 'notes.md'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert 'Traceback' not in result.stderr
+    assert out_dir.is_dir()
+    assert list(out_dir.iterdir()) == []
+
+
+def test_existing_output_survives_a_failing_batch(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """A target that already exists keeps its contents when the batch fails."""
+    out_dir = tmp_path / 'out'
+    out_dir.mkdir()
+    existing = out_dir / 'first.ipynb'
+    existing.write_text('{"cells": []}')
+
+    first_input = tmp_path / 'first.ipynb'
+    write(first_input, sample_notebook)
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{first_input}"
+output = "{existing}"
+
+[[files]]
+input = "{tmp_path / 'missing.ipynb'}"
+output = "{out_dir / 'second.ipynb'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert existing.read_text() == '{"cells": []}'
+    assert [p.name for p in out_dir.iterdir()] == ['first.ipynb']
+
+
+def test_scrub_file_writes_one_entry(tmp_path: Path, sample_notebook, note_cell):
+    """The single-entry API writes both outputs and leaves nothing staged."""
+    sample_notebook['cells'].append(note_cell)
+    input_path = tmp_path / 'input.ipynb'
+    write(input_path, sample_notebook)
+    out_dir = tmp_path / 'out'
+
+    project.scrub_file(
+        FileEntry(
+            input=input_path,
+            output=out_dir / 'out.ipynb',
+            notes_file=out_dir / 'notes.md',
+        ),
+    )
+
+    assert sorted(p.name for p in out_dir.iterdir()) == ['notes.md', 'out.ipynb']
+
+
+def test_commit_failure_removes_staged_files(
+    tmp_path: Path,
+    sample_notebook,
+    monkeypatch,
+):
+    """A rename that fails is reported, and the staged files are cleaned up."""
+    input_path = tmp_path / 'input.ipynb'
+    write(input_path, sample_notebook)
+    out_dir = tmp_path / 'out'
+
+    def boom(staged):
+        raise OSError('rename failed')
+
+    monkeypatch.setattr(project, 'commit', boom)
+
+    with pytest.raises(ScrubberError, match='Error writing output'):
+        project.scrub_file(FileEntry(input=input_path, output=out_dir / 'out.ipynb'))
+
+    assert list(out_dir.iterdir()) == []
 
 
 def test_unexpected_error_is_not_swallowed(
