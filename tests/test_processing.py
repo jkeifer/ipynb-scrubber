@@ -4,6 +4,7 @@ import pytest
 
 from ipynb_scrubber.config import ScrubbingOptions
 from ipynb_scrubber.exceptions import InvalidNotebookError, ProcessingError
+from ipynb_scrubber.notebook import get_notebook_language
 from ipynb_scrubber.notes import write_notes_file
 from ipynb_scrubber.processor import process_notebook
 
@@ -98,9 +99,8 @@ def test_input_notebook_is_untouched_on_success(make_notebook, code):
 def test_input_notebook_is_untouched_after_a_mid_notebook_error():
     """Cell 0 is rewritable and cell 1 is fatal: an all-or-nothing check.
 
-    Before this was atomic, cell 0 came back already cleared and stripped of
-    its outputs, leaving the caller with a notebook that was neither the
-    original nor a valid exercise version.
+    Processing is atomic, so a failure part way through leaves the caller's
+    notebook exactly as they handed it over, rather than half-scrubbed.
     """
     nb = {
         'cells': [
@@ -795,3 +795,15 @@ def test_notebook_without_metadata_is_accepted(code):
     """metadata is optional; the processor supplies it."""
     result, _ = process_notebook({'cells': [code('x = 1')]}, OPTS)
     assert result['metadata'] == {'exercise_version': True}
+
+
+def test_notes_fence_follows_the_notebook_language(tmp_path, code):
+    """A non-Python notebook gets its notes fenced in its own language."""
+    nb = {
+        'cells': [code('#| scrub-note: ex-1\nx <- 1')],
+        'metadata': {'language_info': {'name': 'r'}},
+    }
+    _, notes = process_notebook(nb, OPTS)
+    out = tmp_path / 'notes.md'
+    write_notes_file(notes, out, get_notebook_language(nb))
+    assert '```r\n#| scrub-note: ex-1\nx <- 1\n```' in out.read_text()
