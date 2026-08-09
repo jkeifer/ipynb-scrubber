@@ -4,14 +4,13 @@ from .exceptions import ProcessingError
 
 
 def write_notes_file(
-    notes_dict: dict[str, tuple[str, str]],
+    notes_dict: dict[str, str],
     output_path: Path,
 ) -> None:
     """Write collected cell notes to a Markdown file.
 
     Args:
-        notes_dict: Map of note_id -> (cell_type, content). Notes are only
-            ever collected from code cells, so content is always Python.
+        notes_dict: Map of note_id -> content.
         output_path: Path where notes file will be written
 
     Raises:
@@ -27,7 +26,7 @@ def write_notes_file(
                 'for note-taking.\n\n',
             )
 
-            for note_id, (_, content) in notes_dict.items():
+            for note_id, content in notes_dict.items():
                 f.write(f'## {note_id}\n\n')
                 f.write('```python\n')
                 f.write(content)

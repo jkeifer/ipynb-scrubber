@@ -1,21 +1,15 @@
+from typing import Any
+
 from .actions import Note, Omit, apply, decide
 from .config import ScrubbingOptions
 from .exceptions import ProcessingError, ScrubberError
 from .notebook import Cell, Notebook, get_cell_source, validate_notebook
 
-__all__ = [
-    'Cell',
-    'Notebook',
-    'get_cell_source',
-    'process_notebook',
-    'validate_notebook',
-]
-
 
 def process_notebook(
-    notebook: Notebook,
+    notebook: Any,
     scrub_options: ScrubbingOptions,
-) -> tuple[Notebook, dict[str, tuple[str, str]]]:
+) -> tuple[Notebook, dict[str, str]]:
     """Process a notebook to create an exercise version.
 
     Args:
@@ -24,7 +18,7 @@ def process_notebook(
 
     Returns:
         Tuple of (processed_notebook, notes_dict) where notes_dict maps
-        note_id -> (cell_type, original_source) for noted cells.
+        note_id -> original_source for noted cells.
 
     Raises:
         InvalidNotebookError: If the notebook structure is invalid
@@ -32,7 +26,7 @@ def process_notebook(
     """
     validate_notebook(notebook)
 
-    notes: dict[str, tuple[str, str]] = {}
+    notes: dict[str, str] = {}
     note_origin: dict[str, int] = {}
     processed: list[Cell] = []
 
@@ -51,10 +45,7 @@ def process_notebook(
                         'must be unique within a notebook',
                     )
                 note_origin[action.note_id] = index
-                notes[action.note_id] = (
-                    cell.get('cell_type', 'code'),
-                    get_cell_source(cell),
-                )
+                notes[action.note_id] = get_cell_source(cell)
 
             processed.append(apply(cell, action))
         except ScrubberError as e:
