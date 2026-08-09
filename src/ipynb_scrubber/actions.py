@@ -6,7 +6,7 @@ from typing import Any, assert_never
 from .config import ScrubbingOptions, reject_unknown_keys
 from .exceptions import ProcessingError, ScrubberError
 from .notebook import Cell, get_cell_source
-from .options import header_opens_block, parse_cell_options
+from .options import Header, parse_cell_options
 
 
 @dataclass(frozen=True)
@@ -103,12 +103,12 @@ def _note_action(value: Any, opts: ScrubbingOptions) -> Note:
     )
 
 
-def _check_one_scrubber_option(
-    cell_options: dict[str, Any],
-    cell_type: str,
-    source: str,
-    opts: ScrubbingOptions,
-) -> None:
+def _scrubber_names(opts: ScrubbingOptions) -> tuple[str, str, str]:
+    """The option names this tool defines, under their configured spellings."""
+    return (opts.clear_tag, opts.omit_tag, opts.note_tag)
+
+
+def _check_one_scrubber_option(header: Header, opts: ScrubbingOptions) -> None:
     """Require the header to carry no more than one scrubber option.
 
     Under-indented block content is a sibling option as far as YAML is
@@ -119,13 +119,12 @@ def _check_one_scrubber_option(
     Raises:
         ProcessingError: If more than one scrubber option is present.
     """
-    scrubber_names = {opts.clear_tag, opts.omit_tag, opts.note_tag}
-    present = sorted(scrubber_names & cell_options.keys())
+    present = sorted(set(_scrubber_names(opts)) & header.options.keys())
     if len(present) < 2:
         return
 
     message = f'only one scrubber option per cell, but found {", ".join(present)}.'
-    if header_opens_block(cell_type, source):
+    if header.block_styled:
         message += (
             ' If one of these was meant as block content, indent it more '
             'deeply than the option line that opens the block'
@@ -167,9 +166,10 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
     cell_type = cell.get('cell_type', '')
     source = get_cell_source(cell)
-    cell_options = parse_cell_options(cell_type, source)
+    header = parse_cell_options(cell_type, source, _scrubber_names(opts))
+    cell_options = header.options
 
-    _check_one_scrubber_option(cell_options, cell_type, source, opts)
+    _check_one_scrubber_option(header, opts)
 
     if opts.omit_tag in tags:
         return Omit()

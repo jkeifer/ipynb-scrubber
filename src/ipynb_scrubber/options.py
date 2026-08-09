@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import re
-
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
@@ -13,39 +12,22 @@ CODE_MARKER = '#|'
 MARKDOWN_MARKER = '<!--'
 MARKDOWN_SUFFIX = '-->'
 
-#: A header line whose value is a block scalar indicator (``|`` or ``>``, with
-#: any chomping or explicit-indentation modifier) and nothing else. Used only
-#: to decide whether an error message should talk about block indentation.
-_BLOCK_INDICATOR = re.compile(r':[^\S\n]*[|>][-+0-9]*[^\S\n]*$', re.MULTILINE)
+#: The scalar styles that open a block: content lives on the lines below the
+#: option, indented relative to it.
+_BLOCK_STYLES = frozenset({'|', '>'})
 
 
-class _Loader(yaml.SafeLoader):
-    """A safe YAML loader that rejects a repeated key.
+@dataclass(frozen=True)
+class Header:
+    """What a cell's option header carries.
 
-    YAML resolves a repeated key by keeping the last one. In an option header
-    that silently discards an instruction the author wrote, so a repeat is
-    reported instead.
+    ``options`` is the mapping the header holds, with values resolved by YAML.
+    ``block_styled`` names the options written as a block scalar, which tells a
+    caller whether advice about block indentation is relevant.
     """
 
-    def construct_mapping(
-        self,
-        node: yaml.MappingNode,
-        deep: bool = False,
-    ) -> dict[Any, Any]:
-        """Build a mapping, raising on a key that appears more than once.
-
-        Raises:
-            ProcessingError: If a key is repeated.
-        """
-        seen: list[Any] = []
-        for key_node, _ in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if key in seen:
-                raise ProcessingError(
-                    f"Duplicate option '{key}' in cell option header",
-                )
-            seen.append(key)
-        return super().construct_mapping(node, deep)
+    options: dict[str, Any] = field(default_factory=dict)
+    block_styled: frozenset[str] = frozenset()
 
 
 def _code_header(source: str) -> str:
@@ -148,36 +130,141 @@ def _describe(error: yaml.YAMLError, text: str) -> str:
 
 
 def _load(text: str) -> Any:
-    """Parse ``text`` as a single YAML document.
+    """Resolve ``text`` into the Python values its YAML describes.
 
     Raises:
         ProcessingError: If the text is not one well-formed YAML document.
     """
-    loader: _Loader | None = None
     try:
-        # Construction reads the stream, so it is inside the guard too.
-        loader = _Loader(text)
-        return loader.get_single_data()
+        return yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise ProcessingError(_describe(e, text)) from e
-    finally:
-        if loader is not None:
-            loader.dispose()
 
 
-def header_opens_block(cell_type: str, source: str) -> bool:
-    """True if the cell's option header opens a block scalar.
+def _not_a_mapping(text: str) -> ProcessingError:
+    """The error for a header that holds something other than a mapping.
 
-    Answers "could an option here have been meant as block content?", which
-    lets a caller decide whether advice about block indentation is relevant.
+    A lone name — ``#| scrub-omit`` — is a bare string, and the fix is the
+    colon it is missing, so the message offers it.
     """
-    header = _HEADERS.get(cell_type)
-    if header is None:
-        return False
-    return _BLOCK_INDICATOR.search(header(source)) is not None
+    data = _load(text)
+    hint = (
+        f" Did you mean '{data}:'?"
+        if isinstance(data, str) and '\n' not in data
+        else ''
+    )
+    return ProcessingError(
+        "Cell option header must be a mapping of 'name: value' entries, "
+        f'but got {type(data).__name__}.{hint}',
+    )
 
 
-def parse_cell_options(cell_type: str, source: str) -> dict[str, Any]:
+def _reject_repeated_names(node: yaml.MappingNode) -> None:
+    """Refuse a name that the header carries more than once.
+
+    YAML resolves a repeated name by keeping the last one. In an option header
+    that silently discards an instruction the author wrote, so a repeat is
+    reported instead.
+
+    Raises:
+        ProcessingError: If a name appears more than once.
+    """
+    seen: set[tuple[str, str]] = set()
+    for key, _ in node.value:
+        if not isinstance(key, yaml.ScalarNode):
+            continue
+        # The tag is part of the identity: quoted '12' and bare 12 are the
+        # same characters but different names.
+        identity = (key.tag, key.value)
+        if identity in seen:
+            raise ProcessingError(
+                f"Duplicate option '{key.value}' in cell option header",
+            )
+        seen.add(identity)
+
+
+def _reject_commented_value(name: str, value: yaml.Node, lines: list[str]) -> None:
+    """Refuse a value that YAML cut short at a ``#``.
+
+    Only a plain, unquoted scalar can lose text this way. A quoted value keeps
+    its ``#`` and a block scalar is verbatim, so a comment beside either is
+    deliberate.
+
+    Raises:
+        ProcessingError: If the value is followed by a comment.
+    """
+    if not isinstance(value, yaml.ScalarNode) or value.style is not None:
+        return
+
+    end = value.end_mark
+    if end.line >= len(lines):
+        return
+    if not lines[end.line][end.column :].lstrip().startswith('#'):
+        return
+
+    raise ProcessingError(
+        f"Option '{name}' is cut short by a YAML comment: in the option "
+        "header an unquoted '#' starts a comment, so the text from there to "
+        'the end of the line is discarded. Quote the value '
+        f'({name}: "# TODO: your code here") or write it as a block scalar '
+        f"('{name}: |' with the text indented on the lines below)",
+    )
+
+
+def _reject_commented_values(
+    node: yaml.MappingNode,
+    text: str,
+    names: Collection[str],
+) -> None:
+    """Refuse an option whose value YAML cut short at a ``#``.
+
+    In YAML a ``#`` outside quotes opens a comment, and the rest of the line
+    goes with it. Replacement text is full of Python comments, so the loss is
+    likely and the result is plausible enough to ship unnoticed: the option
+    keeps whatever came before the ``#``, or falls back to its default when
+    nothing did.
+
+    The options this tool defines are checked, and so are the entries of an
+    option written as a mapping, because everything under such a name belongs
+    to the option too. Names the tool does not define are somebody else's to
+    read, and a comment beside one of those is left alone.
+
+    Raises:
+        ProcessingError: If an option's value is followed by a comment.
+    """
+    lines = text.split('\n')
+
+    for key, value in node.value:
+        if not isinstance(key, yaml.ScalarNode) or key.value not in names:
+            continue
+        if isinstance(value, yaml.MappingNode):
+            for entry, entry_value in value.value:
+                if isinstance(entry, yaml.ScalarNode):
+                    _reject_commented_value(
+                        f'{key.value}.{entry.value}',
+                        entry_value,
+                        lines,
+                    )
+            continue
+        _reject_commented_value(key.value, value, lines)
+
+
+def _block_styled(node: yaml.MappingNode) -> frozenset[str]:
+    """The names of the options written as a block scalar."""
+    return frozenset(
+        key.value
+        for key, value in node.value
+        if isinstance(key, yaml.ScalarNode)
+        and isinstance(value, yaml.ScalarNode)
+        and value.style in _BLOCK_STYLES
+    )
+
+
+def parse_cell_options(
+    cell_type: str,
+    source: str,
+    names: Collection[str],
+) -> Header:
     """Parse the option header at the top of a cell's source.
 
     Code cells carry the header as a leading run of Quarto ``#|`` lines;
@@ -185,40 +272,56 @@ def parse_cell_options(cell_type: str, source: str) -> dict[str, Any]:
     one YAML document, and the mapping it holds is returned with its values
     resolved by YAML: ``scrub-omit:`` yields ``None``, ``scrub-clear: hello``
     yields ``'hello'``, and a block scalar yields its lines. Cell types with no
-    comment syntax to hide a header in always yield an empty mapping.
+    comment syntax to hide a header in always yield an empty header.
+
+    ``names`` is the set of option names this tool defines. The header is
+    shared with whatever else writes in the same comments, so text that holds
+    no such name is left alone: a ``#|-----`` divider or a ``#| fig-cap: A: B``
+    that YAML cannot read yields no options rather than failing the run.
 
     Raises:
-        ProcessingError: If the header is not one well-formed YAML mapping, or
-            repeats a key.
+        ProcessingError: If a header carrying one of ``names`` is not one
+            well-formed YAML mapping, repeats a name, or lets a YAML comment
+            eat an option's value.
     """
-    header = _HEADERS.get(cell_type)
-    if header is None:
-        return {}
+    build = _HEADERS.get(cell_type)
+    if build is None:
+        return Header()
 
-    text = header(source)
+    text = build(source)
     if not text.strip():
-        return {}
+        return Header()
 
-    data = _load(text)
-    if data is None:
-        return {}
+    ours = any(name in text for name in names)
 
-    if not isinstance(data, dict):
-        hint = (
-            f" Did you mean '{data}:'?"
-            if isinstance(data, str) and '\n' not in data
-            else ''
-        )
-        raise ProcessingError(
-            "Cell option header must be a mapping of 'name: value' entries, "
-            f'but got {type(data).__name__}.{hint}',
-        )
+    try:
+        # The node graph carries the writing that resolved values drop: which
+        # scalars are block scalars, and where each value stopped.
+        node = yaml.compose(text)
+    except yaml.YAMLError as e:
+        if not ours:
+            return Header()
+        raise ProcessingError(_describe(e, text)) from e
 
-    unnamed = [key for key in data if not isinstance(key, str)]
+    if node is None:
+        return Header()
+
+    if not isinstance(node, yaml.MappingNode):
+        if not ours:
+            return Header()
+        raise _not_a_mapping(text)
+
+    _reject_repeated_names(node)
+    _reject_commented_values(node, text, names)
+    block_styled = _block_styled(node)
+
+    options = _load(text)
+
+    unnamed = [key for key in options if not isinstance(key, str)]
     if unnamed:
         raise ProcessingError(
             'Cell option names must be text, but the header carries '
             f'{unnamed[0]!r}. Quote it if it was meant as a name',
         )
 
-    return data
+    return Header(options, block_styled)

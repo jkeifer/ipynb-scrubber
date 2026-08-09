@@ -225,6 +225,12 @@ option is a `name: value` entry, the colon is required even when there is no
 value, and values follow YAML's rules for quoting, typing and multi-line text.
 Names the tool does not define, including Quarto's own options, are ignored.
 
+The header is shared with whatever else writes in the same comments, so a
+header that names no scrubber option is left alone: a `#|-----` divider or a
+`#| fig-cap: A: B` that YAML cannot read yields no options rather than failing
+the run. Once a scrubber option is named, the whole header must be readable
+YAML, because an option the tool cannot see is an answer shipped to students.
+
 #### Code Cells - Quarto Options
 
 ```python
@@ -305,11 +311,24 @@ cleared content:
 An option written with no value at all — `#| scrub-clear:` — uses the default
 `--clear-text` value.
 
-**Quote replacement text that starts with `#`.** An unquoted `#` opens a YAML
-comment, so `#| scrub-clear: # TODO` supplies no text and falls back to the
-default. Write `#| scrub-clear: "# TODO"` instead. The same goes for text
-starting with `*`, `&`, `!`, `|`, `>`, `[`, `{`, `%`, `@` or `` ` ``, and for
-text containing `: `. Quoting is always safe, so quote when in doubt.
+**Replacement text containing `#` must be quoted or written as a block
+scalar.** In YAML an unquoted `#` opens a comment that runs to the end of the
+line, which would take the replacement text with it. Writing one is an error
+naming the option, so text is never lost in silence. Both spellings keep the
+`#`:
+
+```python
+#| scrub-clear: "# TODO: your code here"
+```
+
+```python
+#| scrub-clear: |
+#|   # TODO: your code here
+```
+
+Quoting is what other awkward text needs too: text starting with `*`, `&`,
+`!`, `|`, `>`, `[`, `{`, `%`, `@` or `` ` ``, and text containing `: `.
+Quoting is always safe, so quote when in doubt.
 
 Values keep the type YAML gives them, and a value that is not text is an error
 rather than a surprise. `#| scrub-clear: no` is the boolean false, so it fails
