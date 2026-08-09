@@ -20,14 +20,14 @@ ipynb-scrubber = "ipynb_scrubber.cli:cli"
 [project.urls]
 Repository = 'https://github.com/jkeifer/ipynb-scrubber'
 
-[tool.uv]
-dev-dependencies = [
-    "mypy>=1.15.0",
-    "pre-commit>=4.2.0",
-    "pre-commit-hooks>=5.0.0",
-    "pytest>=8.3.5",
-    "pytest-cov>=6.1.1",
-    "ruff>=0.11.6",
+[dependency-groups]
+dev = [
+    "mypy>=1.17",
+    "pre-commit>=4.2",
+    "pre-commit-hooks>=5.0",
+    "pytest>=8.3",
+    "pytest-cov>=6.1",
+    "ruff>=0.14",
 ]
 
 [tool.hatch.version]
@@ -85,6 +85,9 @@ scripts_are_modules = true
 
 [tool.pytest.ini_options]
 addopts="--cov=ipynb_scrubber"
+
+[tool.coverage.run]
+patch = ['subprocess']
 
 [tool.coverage.report]
 show_missing = true
