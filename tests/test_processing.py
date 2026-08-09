@@ -23,8 +23,14 @@ def test_duplicate_note_ids_error():
         ('code', '#| scrub-note: ex-1\nSOLUTION_A = 1'),
         ('code', '#| scrub-note: ex-1\nSOLUTION_B = 2'),
     )
-    with pytest.raises(ProcessingError, match=r"Cell 1.*[Dd]uplicate note id 'ex-1'"):
+    with pytest.raises(
+        ProcessingError,
+        match=r"Cell 1.*[Dd]uplicate note id 'ex-1'",
+    ) as exc_info:
         process_notebook(nb, OPTS)
+    message = str(exc_info.value)
+    assert 'cell 0' in message
+    assert 'Cell 1' in message
 
 
 def test_error_is_prefixed_with_the_offending_cell_index():
