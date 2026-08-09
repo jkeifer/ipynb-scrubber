@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ipynb_scrubber.processor import Notebook
+from ipynb_scrubber.notebook import Notebook
 
 
 @pytest.fixture

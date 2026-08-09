@@ -2,6 +2,7 @@
 
 from .config import ScrubbingOptions
 from .exceptions import ScrubberError
-from .processor import Notebook, process_notebook
+from .notebook import Notebook
+from .processor import process_notebook
 
 __all__ = ['Notebook', 'ScrubberError', 'ScrubbingOptions', 'process_notebook']
