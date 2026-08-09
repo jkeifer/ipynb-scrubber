@@ -66,7 +66,7 @@ def find_config_file(start_dir: Path | None = None) -> Path | None:
                 # Check if it has our config section
                 if 'tool' in data and 'ipynb-scrubber' in data['tool']:
                     return pyproject
-            except Exception:  # noqa: BLE001, S110
+            except (OSError, tomllib.TOMLDecodeError):
                 # Invalid TOML or read error, skip this file
                 pass
 
