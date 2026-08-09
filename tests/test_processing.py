@@ -625,6 +625,21 @@ def test_note_cell_inline_text_without_block_is_not_an_error(make_notebook, code
     assert 'ex-1' in notes
 
 
+def test_note_cell_with_custom_note_tag(make_notebook, code):
+    """A configured custom note_tag, not just 'scrub-note', is recognized in source."""
+    nb = make_notebook(
+        code('#| solution-note: custom-id\ndef custom_solution():\n    return 1'),
+    )
+    opts = ScrubbingOptions(note_tag='solution-note')
+    result, notes = process_notebook(nb, opts)
+    assert notes['custom-id'] == (
+        '#| solution-note: custom-id\ndef custom_solution():\n    return 1'
+    )
+    assert result['cells'][0]['source'] == (
+        f'# (See notes: custom-id)\n{opts.clear_text}'
+    )
+
+
 def test_note_absent_on_markdown_and_raw_cells_is_fine(make_notebook, markdown, raw):
     """A cell without a note option is untouched by the note check."""
     nb = make_notebook(
