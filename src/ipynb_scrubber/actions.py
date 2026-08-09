@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import assert_never
+from typing import Any, assert_never
 
-from .config import ScrubbingOptions
-from .exceptions import ProcessingError
+from .config import ScrubbingOptions, reject_unknown_keys
+from .exceptions import ProcessingError, ScrubberError
 from .notebook import Cell, get_cell_source
-from .options import Option, inline_plus_block_message, parse_cell_options
+from .options import header_opens_block, parse_cell_options
 
 
 @dataclass(frozen=True)
@@ -42,25 +42,111 @@ CellRewrite = Keep | Clear | Note
 CellAction = Omit | CellRewrite
 
 
-def _note_action(option: Option, opts: ScrubbingOptions) -> Note:
-    fields = option.fields(2)
-    note_id = fields[0] if fields else ''
-    if not note_id:
+def _replacement_text(name: str, value: Any, default: str) -> str:
+    """The replacement text an option carries; ``default`` when it carries none.
+
+    YAML resolves an unquoted value to a type, so a value that is not text is
+    reported rather than rendered: ``scrub-clear: no`` is a boolean, and
+    clearing a cell to ``False`` is never what the author meant.
+
+    Raises:
+        ProcessingError: If the value is present but is not text.
+    """
+    if value is None:
+        return default
+    if not isinstance(value, str):
         raise ProcessingError(
-            f"Option '{opts.note_tag}' requires an id, "
-            f"e.g. '{opts.note_tag}: exercise-1'",
+            f"Option '{name}' takes replacement text, but got {value!r}. "
+            'Quote the value to use it as text',
         )
+    return value
 
-    inline_replacement = fields[1] if len(fields) > 1 else None
 
-    if option.block is not None:
-        if inline_replacement:
-            raise ProcessingError(inline_plus_block_message(opts.note_tag))
-        return Note(note_id, option.block)
+def _note_id(value: Any, opts: ScrubbingOptions) -> str:
+    """The note id from a ``scrub-note`` scalar or its mapping's ``id``.
 
-    if inline_replacement is not None:
-        return Note(note_id, inline_replacement)
-    return Note(note_id, opts.clear_text)
+    Raises:
+        ProcessingError: If the id is missing, empty, or not text.
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise ProcessingError(
+        f"Option '{opts.note_tag}' requires an id, e.g. '{opts.note_tag}: exercise-1'",
+    )
+
+
+def _note_action(value: Any, opts: ScrubbingOptions) -> Note:
+    """Build the Note described by a ``scrub-note`` option's value.
+
+    The value is either the note id on its own, or a mapping carrying ``id``
+    and an optional ``text`` to leave in the cleared cell.
+
+    Raises:
+        ProcessingError: If the id is unusable, the text is not a string, or
+            the mapping carries a key the option does not define.
+    """
+    if not isinstance(value, dict):
+        return Note(_note_id(value, opts), opts.clear_text)
+
+    try:
+        reject_unknown_keys(value, ('id', 'text'), f'{opts.note_tag} key')
+    except ScrubberError as e:
+        raise ProcessingError(str(e)) from e
+
+    return Note(
+        _note_id(value.get('id'), opts),
+        _replacement_text(
+            f'{opts.note_tag}.text',
+            value.get('text'),
+            opts.clear_text,
+        ),
+    )
+
+
+def _check_one_scrubber_option(
+    cell_options: dict[str, Any],
+    cell_type: str,
+    source: str,
+    opts: ScrubbingOptions,
+) -> None:
+    """Require the header to carry no more than one scrubber option.
+
+    Under-indented block content is a sibling option as far as YAML is
+    concerned, and reading it as one would silently delete a cell, so the
+    ambiguity is refused. When the header opens a block, the message says how
+    to resolve it.
+
+    Raises:
+        ProcessingError: If more than one scrubber option is present.
+    """
+    scrubber_names = {opts.clear_tag, opts.omit_tag, opts.note_tag}
+    present = sorted(scrubber_names & cell_options.keys())
+    if len(present) < 2:
+        return
+
+    message = f'only one scrubber option per cell, but found {", ".join(present)}.'
+    if header_opens_block(cell_type, source):
+        message += (
+            ' If one of these was meant as block content, indent it more '
+            'deeply than the option line that opens the block'
+        )
+    raise ProcessingError(message)
+
+
+def _omit_action(value: Any, opts: ScrubbingOptions) -> Omit:
+    """Build the Omit a ``scrub-omit`` option describes.
+
+    Presence is the whole signal the option carries, so a value means the
+    author expected something the option cannot do.
+
+    Raises:
+        ProcessingError: If the option carries a value.
+    """
+    if value is not None:
+        raise ProcessingError(
+            f"Option '{opts.omit_tag}' takes no value, but got {value!r}",
+        )
+    return Omit()
 
 
 def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
@@ -79,24 +165,17 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
             ambiguous.
     """
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
-    cell_options = parse_cell_options(
-        cell.get('cell_type', ''),
-        get_cell_source(cell),
-    )
+    cell_type = cell.get('cell_type', '')
+    source = get_cell_source(cell)
+    cell_options = parse_cell_options(cell_type, source)
 
-    scrubber_names = {opts.clear_tag, opts.omit_tag, opts.note_tag}
-    present = sorted(scrubber_names & cell_options.keys())
-    if len(present) > 1:
-        message = f'only one scrubber option per cell, but found {", ".join(present)}.'
-        if any(cell_options[name].block is not None for name in present):
-            message += (
-                ' If one of these was meant as block content, indent it more '
-                'deeply than the option line that opens the block'
-            )
-        raise ProcessingError(message)
+    _check_one_scrubber_option(cell_options, cell_type, source, opts)
 
-    if opts.omit_tag in tags or opts.omit_tag in cell_options:
+    if opts.omit_tag in tags:
         return Omit()
+
+    if opts.omit_tag in cell_options:
+        return _omit_action(cell_options[opts.omit_tag], opts)
 
     if opts.note_tag in tags:
         raise ProcessingError(
@@ -104,18 +183,21 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
             f"write '#| {opts.note_tag}: <id>' in a code cell's source",
         )
 
-    note = cell_options.get(opts.note_tag)
-    if note is not None:
-        if cell.get('cell_type', '') != 'code':
+    if opts.note_tag in cell_options:
+        if cell_type != 'code':
             raise ProcessingError(
                 f"Option '{opts.note_tag}' is only supported on code cells",
             )
-        return _note_action(note, opts)
+        return _note_action(cell_options[opts.note_tag], opts)
 
-    clear = cell_options.get(opts.clear_tag)
-    if clear is not None:
-        text = clear.single_text()
-        return Clear(opts.clear_text if text is None else text)
+    if opts.clear_tag in cell_options:
+        return Clear(
+            _replacement_text(
+                opts.clear_tag,
+                cell_options[opts.clear_tag],
+                opts.clear_text,
+            ),
+        )
     if opts.clear_tag in tags:
         return Clear(opts.clear_text)
 

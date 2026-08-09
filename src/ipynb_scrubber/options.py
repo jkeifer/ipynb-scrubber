@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import re
+
 from collections.abc import Callable
-from dataclasses import dataclass
+from typing import Any
+
+import yaml
 
 from .exceptions import ProcessingError
 
@@ -9,306 +13,212 @@ CODE_MARKER = '#|'
 MARKDOWN_MARKER = '<!--'
 MARKDOWN_SUFFIX = '-->'
 
-_ESCAPES = {
-    'n': '\n',
-    't': '\t',
-    '\\': '\\',
-    '|': '|',
-}
+#: A header line whose value is a block scalar indicator (``|`` or ``>``, with
+#: any chomping or explicit-indentation modifier) and nothing else. Used only
+#: to decide whether an error message should talk about block indentation.
+_BLOCK_INDICATOR = re.compile(r':[^\S\n]*[|>][-+0-9]*[^\S\n]*$', re.MULTILINE)
 
 
-def inline_plus_block_message(name: str) -> str:
-    """Shared wording for the inline-text-plus-block conflict.
+class _Loader(yaml.SafeLoader):
+    """A safe YAML loader that rejects a repeated key.
 
-    Used both by ``Option.single_text`` (e.g. ``scrub-clear``) and by
-    ``actions._note_action`` (``scrub-note``), so a user hitting the same
-    mistake on either option gets identical advice.
-    """
-    return (
-        f"Option '{name}' has both inline text and a block: "
-        "the trailing '|' opens a block. Use one or the other, or "
-        "escape a literal pipe as '\\|'"
-    )
-
-
-@dataclass(frozen=True)
-class Option:
-    """A scrubber option parsed from a cell's option header.
-
-    Attributes:
-        name: The option name, used in error messages.
-        raw_inline: Text written on the option line itself, verbatim —
-            escape sequences are NOT expanded. None when the option was
-            written with no ``:`` at all (e.g. ``#| scrub-clear``), which
-            means "use the configured default".
-        block: Content of an attached ``|`` block, or None if there was none.
-
-    Escapes are expanded lazily, by ``inline`` and ``fields``, so that
-    consumers which split the value on ``|`` split *before* ``\\|`` has
-    become an ordinary pipe.
+    YAML resolves a repeated key by keeping the last one. In an option header
+    that silently discards an instruction the author wrote, so a repeat is
+    reported instead.
     """
 
-    name: str
-    raw_inline: str | None = None
-    block: str | None = None
-
-    @property
-    def inline(self) -> str | None:
-        """The inline value, stripped and unescaped."""
-        if self.raw_inline is None:
-            return None
-        return unescape(self.raw_inline.strip())
-
-    def fields(self, count: int) -> list[str]:
-        """Split the inline value on unescaped pipes into at most ``count`` parts.
-
-        Each part is stripped and unescaped afterwards, so ``\\|`` survives
-        as a literal pipe inside a field instead of acting as a separator.
-        """
-        if self.raw_inline is None:
-            return []
-
-        parts: list[str] = []
-        current: list[str] = []
-        index = 0
-        while index < len(self.raw_inline):
-            char = self.raw_inline[index]
-            if char == '\\' and index + 1 < len(self.raw_inline):
-                current.append(self.raw_inline[index : index + 2])
-                index += 2
-                continue
-            if char == '|' and len(parts) < count - 1:
-                parts.append(''.join(current))
-                current = []
-                index += 1
-                continue
-            current.append(char)
-            index += 1
-        parts.append(''.join(current))
-
-        return [unescape(part.strip()) for part in parts]
-
-    def single_text(self) -> str | None:
-        """The one text value this option carries, or None for the default.
+    def construct_mapping(
+        self,
+        node: yaml.MappingNode,
+        deep: bool = False,
+    ) -> dict[Any, Any]:
+        """Build a mapping, raising on a key that appears more than once.
 
         Raises:
-            ProcessingError: If inline text and a block are both present.
+            ProcessingError: If a key is repeated.
         """
-        if self.block is not None:
-            if self.raw_inline and self.raw_inline.strip():
-                raise ProcessingError(inline_plus_block_message(self.name))
-            return self.block
-        return self.inline
+        seen: list[Any] = []
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise ProcessingError(
+                    f"Duplicate option '{key}' in cell option header",
+                )
+            seen.append(key)
+        return super().construct_mapping(node, deep)
 
 
-def unescape(value: str) -> str:
-    """Expand escape sequences in an inline option value.
+def _code_header(source: str) -> str:
+    """The YAML text carried by a code cell's leading run of ``#|`` lines.
 
-    Recognises ``\\n``, ``\\t``, ``\\\\`` and ``\\|``. Any other backslash
-    sequence is passed through untouched, so regex literals such as
-    ``r"\\d+"`` survive without doubling.
+    Each marker is stripped along with at most one following space, so that
+    content indented relative to the marker keeps that indentation. A blank
+    line participates in the header when another ``#|`` line follows it, which
+    is what lets a block scalar contain one.
     """
-    result: list[str] = []
-    index = 0
-    while index < len(value):
-        char = value[index]
-        if char == '\\' and index + 1 < len(value) and value[index + 1] in _ESCAPES:
-            result.append(_ESCAPES[value[index + 1]])
-            index += 2
-            continue
-        result.append(char)
-        index += 1
-    return ''.join(result)
+    header: list[str] = []
+    pending: list[str] = []
 
-
-def opens_block(value: str) -> bool:
-    """True if an option value ends with an unescaped pipe."""
-    stripped = value.rstrip()
-    if not stripped.endswith('|'):
-        return False
-
-    backslashes = 0
-    index = len(stripped) - 2
-    while index >= 0 and stripped[index] == '\\':
-        backslashes += 1
-        index -= 1
-    return backslashes % 2 == 0
-
-
-def dedent_block(lines: list[str]) -> str:
-    """Join block content lines, dedented by their minimum indentation.
-
-    Blank lines are ignored when computing the minimum, preserved as empty
-    lines in the interior, and dropped from both ends. The result has no
-    trailing newline.
-    """
-    expanded = [line.expandtabs() for line in lines]
-    content = [line for line in expanded if line.strip()]
-    if not content:
-        return ''
-
-    indent = min(len(line) - len(line.lstrip()) for line in content)
-    result = [line[indent:] if line.strip() else '' for line in expanded]
-    while result and not result[-1]:
-        result.pop()
-    while result and not result[0]:
-        result.pop(0)
-    return '\n'.join(result)
-
-
-def _split_option(text: str) -> tuple[str, str | None]:
-    """Split an option header body into (name, raw_value).
-
-    raw_value is None when there is no ``:`` at all.
-    """
-    if ':' in text:
-        name, _, raw_value = text.partition(':')
-        return name.strip(), raw_value
-    return text, None
-
-
-def _indent_of(text: str) -> int:
-    """Indentation width, counting a tab as its expanded width."""
-    expanded = text.expandtabs()
-    return len(expanded) - len(expanded.lstrip())
-
-
-def _build_option(name: str, raw_value: str | None, block: str | None) -> Option:
-    """Build an Option from a raw inline value and optional block content."""
-    if raw_value is None:
-        return Option(name=name, raw_inline=None, block=block)
-
-    raw_inline = raw_value
-    if block is not None:
-        # Drop the trailing pipe that opened the block.
-        raw_inline = raw_inline.rstrip()[:-1]
-    return Option(name=name, raw_inline=raw_inline, block=block)
-
-
-@dataclass(frozen=True)
-class Dialect:
-    """How one cell type spells its option header.
-
-    Attributes:
-        header: Maps a stripped source line to (option body, may_open_block),
-            or None if the line is not a header line at all.
-        read_block: Given all lines, the index just past the header line, and
-            the header's own indent, returns (block content lines, next index).
-    """
-
-    header: Callable[[str], tuple[str, bool] | None]
-    read_block: Callable[[list[str], int, int], tuple[list[str], int]]
-
-
-def _code_header(stripped: str) -> tuple[str, bool] | None:
-    if not stripped.startswith(CODE_MARKER):
-        return None
-    return stripped[len(CODE_MARKER) :], True
-
-
-def _markdown_header(stripped: str) -> tuple[str, bool] | None:
-    if not stripped.startswith(MARKDOWN_MARKER):
-        return None
-    body = stripped[len(MARKDOWN_MARKER) :].rstrip()
-    if body.endswith(MARKDOWN_SUFFIX):
-        # A self-closing comment cannot open a block.
-        return body.removesuffix(MARKDOWN_SUFFIX), False
-    return body, True
-
-
-def _read_indented_block(
-    lines: list[str],
-    index: int,
-    key_indent: int,
-) -> tuple[list[str], int]:
-    block_lines: list[str] = []
-    while index < len(lines):
-        candidate = lines[index].strip()
-        if not candidate.startswith(CODE_MARKER):
+    for line in source.split('\n'):
+        text = line.lstrip()
+        if text.startswith(CODE_MARKER):
+            header.extend(pending)
+            pending.clear()
+            header.append(text[len(CODE_MARKER) :].removeprefix(' '))
+        elif text:
             break
+        else:
+            pending.append('')
 
-        content = candidate[len(CODE_MARKER) :]
-        if not content.strip():
-            block_lines.append('')
+    return '\n'.join(header)
+
+
+def _markdown_header(source: str) -> str:
+    """The YAML text carried by a markdown cell's leading HTML comments.
+
+    A comment is either self-closing (``<!-- scrub-omit: -->``) or spans to a
+    line containing only ``-->``. The inner text of each is concatenated into
+    one document.
+
+    Raises:
+        ProcessingError: If a comment is never closed.
+    """
+    lines = source.split('\n')
+    header: list[str] = []
+    pending: list[str] = []
+    index = 0
+
+    while index < len(lines):
+        text = lines[index].strip()
+        if not text:
+            pending.append('')
             index += 1
             continue
-        if _indent_of(content) <= key_indent:
+        if not text.startswith(MARKDOWN_MARKER):
             break
 
-        block_lines.append(content)
-        index += 1
-    return block_lines, index
-
-
-def _read_sentinel_block(
-    lines: list[str],
-    index: int,
-    key_indent: int,
-) -> tuple[list[str], int]:
-    block_lines: list[str] = []
-    while index < len(lines):
-        if lines[index].strip() == MARKDOWN_SUFFIX:
-            return block_lines, index + 1
-        block_lines.append(lines[index])
+        header.extend(pending)
+        pending.clear()
+        body = text[len(MARKDOWN_MARKER) :].rstrip()
         index += 1
 
-    raise ProcessingError(
-        'Unterminated block in cell option header: '
-        f"expected a line containing only '{MARKDOWN_SUFFIX}'",
-    )
+        if body.endswith(MARKDOWN_SUFFIX):
+            header.append(body.removesuffix(MARKDOWN_SUFFIX).rstrip().removeprefix(' '))
+            continue
+
+        header.append(body.removeprefix(' '))
+        while True:
+            if index >= len(lines):
+                raise ProcessingError(
+                    'Unterminated comment in cell option header: '
+                    f"expected a line containing only '{MARKDOWN_SUFFIX}'",
+                )
+            if lines[index].strip() == MARKDOWN_SUFFIX:
+                index += 1
+                break
+            header.append(lines[index])
+            index += 1
+
+    return '\n'.join(header)
 
 
-_DIALECTS = {
-    'code': Dialect(header=_code_header, read_block=_read_indented_block),
-    'markdown': Dialect(header=_markdown_header, read_block=_read_sentinel_block),
+_HEADERS: dict[str, Callable[[str], str]] = {
+    'code': _code_header,
+    'markdown': _markdown_header,
 }
 
 
-def _parse(source: str, dialect: Dialect) -> dict[str, Option]:
-    options: dict[str, Option] = {}
-    lines = source.split('\n')
-    index = 0
+def _describe(error: yaml.YAMLError, text: str) -> str:
+    """Turn a YAML parse failure into advice aimed at the header's author."""
+    mark = getattr(error, 'problem_mark', None)
+    lines = text.split('\n')
 
-    while index < len(lines):
-        stripped = lines[index].strip()
-        if not stripped:
-            index += 1
-            continue
-
-        parsed = dialect.header(stripped)
-        if parsed is None:
-            break
-        body, may_open_block = parsed
-
-        key_indent = _indent_of(body)
-        name, raw_value = _split_option(body.strip())
-        index += 1
-
-        block: str | None = None
-        if may_open_block and raw_value is not None and opens_block(raw_value):
-            block_lines, index = dialect.read_block(lines, index, key_indent)
-            block = dedent_block(block_lines)
-
-        if name in options:
-            raise ProcessingError(
-                f"Duplicate option '{name}' in cell option header",
+    if mark is not None and 0 <= mark.line < len(lines):
+        if '\t' in lines[mark.line]:
+            return (
+                f'Invalid cell option header: line {mark.line + 1} contains a '
+                'tab. The header is YAML, which forbids tabs as whitespace; '
+                'indent it with spaces'
             )
-        options[name] = _build_option(name, raw_value, block)
+        problem = getattr(error, 'problem', None)
+        if problem:
+            return f'Invalid cell option header: {problem} (line {mark.line + 1})'
 
-    return options
+    return f'Invalid cell option header: {error}'
 
 
-def parse_cell_options(cell_type: str, source: str) -> dict[str, Option]:
-    """Parse every scrubber option in a cell's option header.
-
-    Code cells use Quarto option syntax (``#| name: value``); markdown cells
-    use HTML comments (``<!-- name: value -->``). Other cell types support no
-    source-based options and always yield an empty mapping.
+def _load(text: str) -> Any:
+    """Parse ``text`` as a single YAML document.
 
     Raises:
-        ProcessingError: If a block is malformed or an option name repeats.
+        ProcessingError: If the text is not one well-formed YAML document.
     """
-    dialect = _DIALECTS.get(cell_type)
-    if dialect is None:
+    loader: _Loader | None = None
+    try:
+        # Construction reads the stream, so it is inside the guard too.
+        loader = _Loader(text)
+        return loader.get_single_data()
+    except yaml.YAMLError as e:
+        raise ProcessingError(_describe(e, text)) from e
+    finally:
+        if loader is not None:
+            loader.dispose()
+
+
+def header_opens_block(cell_type: str, source: str) -> bool:
+    """True if the cell's option header opens a block scalar.
+
+    Answers "could an option here have been meant as block content?", which
+    lets a caller decide whether advice about block indentation is relevant.
+    """
+    header = _HEADERS.get(cell_type)
+    if header is None:
+        return False
+    return _BLOCK_INDICATOR.search(header(source)) is not None
+
+
+def parse_cell_options(cell_type: str, source: str) -> dict[str, Any]:
+    """Parse the option header at the top of a cell's source.
+
+    Code cells carry the header as a leading run of Quarto ``#|`` lines;
+    markdown cells carry it as leading HTML comments. Either way the text is
+    one YAML document, and the mapping it holds is returned with its values
+    resolved by YAML: ``scrub-omit:`` yields ``None``, ``scrub-clear: hello``
+    yields ``'hello'``, and a block scalar yields its lines. Cell types with no
+    comment syntax to hide a header in always yield an empty mapping.
+
+    Raises:
+        ProcessingError: If the header is not one well-formed YAML mapping, or
+            repeats a key.
+    """
+    header = _HEADERS.get(cell_type)
+    if header is None:
         return {}
-    return _parse(source, dialect)
+
+    text = header(source)
+    if not text.strip():
+        return {}
+
+    data = _load(text)
+    if data is None:
+        return {}
+
+    if not isinstance(data, dict):
+        hint = (
+            f" Did you mean '{data}:'?"
+            if isinstance(data, str) and '\n' not in data
+            else ''
+        )
+        raise ProcessingError(
+            "Cell option header must be a mapping of 'name: value' entries, "
+            f'but got {type(data).__name__}.{hint}',
+        )
+
+    unnamed = [key for key in data if not isinstance(key, str)]
+    if unnamed:
+        raise ProcessingError(
+            'Cell option names must be text, but the header carries '
+            f'{unnamed[0]!r}. Quote it if it was meant as a name',
+        )
+
+    return data

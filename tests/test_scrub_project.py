@@ -17,7 +17,7 @@ def sample_notebook():
             {'cell_type': 'code', 'source': '# Regular code', 'metadata': {}},
             {
                 'cell_type': 'code',
-                'source': '#| scrub-clear\ndef solution():\n    return 42',
+                'source': '#| scrub-clear:\ndef solution():\n    return 42',
                 'metadata': {},
                 'outputs': [{'data': {'text/plain': ['42']}}],
                 'execution_count': 1,
