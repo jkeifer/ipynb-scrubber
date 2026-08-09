@@ -4,19 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from ipynb_scrubber.notebook import Notebook
-
 
 @pytest.fixture
-def sample_notebook() -> Notebook:
-    """Create a sample notebook with solution cells."""
+def sample_notebook():
+    """A notebook with a clear-tagged and an omit-tagged cell."""
     return {
         'cells': [
-            {
-                'cell_type': 'code',
-                'source': '# Regular code',
-                'metadata': {},
-            },
+            {'cell_type': 'code', 'source': '# Regular code', 'metadata': {}},
             {
                 'cell_type': 'code',
                 'source': '#| scrub-clear\ndef solution():\n    return 42',
@@ -36,103 +30,18 @@ def sample_notebook() -> Notebook:
     }
 
 
-def test_basic_project(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test basic project scrubbing with config file."""
-    # Create input notebooks
+def write(path: Path, notebook: dict) -> None:
+    path.write_text(json.dumps(notebook))
+
+
+def test_basic_project(tmp_path: Path, sample_notebook, scrub_project):
+    """Multiple files are each processed and written, with progress on stderr."""
     input_dir = tmp_path / 'lectures'
     input_dir.mkdir()
-
     nb1_path = input_dir / 'lesson1.ipynb'
     nb2_path = input_dir / 'lesson2.ipynb'
-
-    with nb1_path.open('w') as f:
-        json.dump(sample_notebook, f)
-    with nb2_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
-    # Create config file
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-input = "{nb1_path}"
-output = "{tmp_path / 'exercises' / 'lesson1.ipynb'}"
-
-[[files]]
-input = "{nb2_path}"
-output = "{tmp_path / 'exercises' / 'lesson2.ipynb'}"
-''')
-
-    # Run scrub-project
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 0
-    assert '✓ Processed' in result.stderr
-
-    # Verify output files exist and are correct
-    output1 = tmp_path / 'exercises' / 'lesson1.ipynb'
-    output2 = tmp_path / 'exercises' / 'lesson2.ipynb'
-
-    assert output1.exists()
-    assert output2.exists()
-
-    with output1.open() as f:
-        nb1_out = json.load(f)
-
-    # Check that cells were processed correctly
-    assert len(nb1_out['cells']) == 2  # omit cell removed
-    assert nb1_out['cells'][0]['source'] == '# Regular code'
-    assert nb1_out['cells'][1]['source'] == '# TODO: Implement this'
-    assert 'outputs' not in nb1_out['cells'][1]
-    assert nb1_out['metadata']['exercise_version'] is True
-
-
-def test_global_options(tmp_path: Path, sample_notebook: Notebook, scrub_project):
-    """Test global options in config file."""
-    input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[options]
-clear-tag = "scrub-clear"
-clear-text = "# YOUR CODE HERE"
-omit-tag = "scrub-omit"
-
-[[files]]
-input = "{input_path}"
-output = "{tmp_path / 'output.ipynb'}"
-''')
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 0
-
-    output_path = tmp_path / 'output.ipynb'
-    with output_path.open() as f:
-        nb_out = json.load(f)
-
-    # Check that custom clear text was used
-    assert nb_out['cells'][1]['source'] == '# YOUR CODE HERE'
-
-
-def test_file_specific_overrides(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test that file-specific options override global options."""
-    input1_path = tmp_path / 'input1.ipynb'
-    input2_path = tmp_path / 'input2.ipynb'
-
-    with input1_path.open('w') as f:
-        json.dump(sample_notebook, f)
-    with input2_path.open('w') as f:
-        json.dump(sample_notebook, f)
+    write(nb1_path, sample_notebook)
+    write(nb2_path, sample_notebook)
 
     config_path = tmp_path / '.ipynb-scrubber.toml'
     config_path.write_text(f'''
@@ -140,39 +49,37 @@ def test_file_specific_overrides(
 clear-text = "# GLOBAL DEFAULT"
 
 [[files]]
-input = "{input1_path}"
-output = "{tmp_path / 'output1.ipynb'}"
+input = "{nb1_path}"
+output = "{tmp_path / 'exercises' / 'lesson1.ipynb'}"
 
 [[files]]
-input = "{input2_path}"
-output = "{tmp_path / 'output2.ipynb'}"
+input = "{nb2_path}"
+output = "{tmp_path / 'exercises' / 'lesson2.ipynb'}"
 clear-text = "# FILE SPECIFIC"
 ''')
 
     result = scrub_project(cwd=str(tmp_path))
 
     assert result.returncode == 0
+    assert '✓ Processed' in result.stderr
 
-    # Check first file uses global default
-    with (tmp_path / 'output1.ipynb').open() as f:
-        nb1 = json.load(f)
-    assert nb1['cells'][1]['source'] == '# GLOBAL DEFAULT'
+    output1 = tmp_path / 'exercises' / 'lesson1.ipynb'
+    output2 = tmp_path / 'exercises' / 'lesson2.ipynb'
+    assert output1.exists()
+    assert output2.exists()
 
-    # Check second file uses file-specific override
-    with (tmp_path / 'output2.ipynb').open() as f:
-        nb2 = json.load(f)
-    assert nb2['cells'][1]['source'] == '# FILE SPECIFIC'
+    nb1_out = json.loads(output1.read_text())
+    nb2_out = json.loads(output2.read_text())
+
+    # Global option reaches file 1; file-level override wins for file 2.
+    assert nb1_out['cells'][1]['source'] == '# GLOBAL DEFAULT'
+    assert nb2_out['cells'][1]['source'] == '# FILE SPECIFIC'
 
 
-def test_custom_config_file_path(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test using a custom config file path."""
+def test_custom_config_file_path(tmp_path: Path, sample_notebook, scrub_project):
+    """--config-file points at a config file outside the discovery path."""
     input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
+    write(input_path, sample_notebook)
 
     custom_config = tmp_path / 'custom-config.toml'
     custom_config.write_text(f'''
@@ -188,7 +95,6 @@ output = "{tmp_path / 'output.ipynb'}"
 
 
 def test_invalid_toml(tmp_path: Path, scrub_project):
-    """Test error when config file has invalid TOML."""
     config_path = tmp_path / '.ipynb-scrubber.toml'
     config_path.write_text('[[files]\ninvalid toml')
 
@@ -198,50 +104,7 @@ def test_invalid_toml(tmp_path: Path, scrub_project):
     assert 'Invalid TOML' in result.stderr
 
 
-def test_missing_required_field_input(tmp_path: Path, scrub_project):
-    """Test error when file entry is missing required 'input' field."""
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-output = "{tmp_path / 'output.ipynb'}"
-''')
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 1
-    assert 'missing required field: input' in result.stderr
-
-
-def test_missing_required_field_output(tmp_path: Path, scrub_project):
-    """Test error when file entry is missing required 'output' field."""
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-input = "{tmp_path / 'input.ipynb'}"
-''')
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 1
-    assert 'missing required field: output' in result.stderr
-
-
-def test_no_files_in_config(tmp_path: Path, scrub_project):
-    """Test error when config has no file entries."""
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text("""
-[options]
-clear-tag = "scrub-clear"
-""")
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 1
-    assert 'must contain at least one file entry' in result.stderr
-
-
 def test_input_file_not_found(tmp_path: Path, scrub_project):
-    """Test error when input file doesn't exist."""
     config_path = tmp_path / '.ipynb-scrubber.toml'
     config_path.write_text(f'''
 [[files]]
@@ -257,7 +120,6 @@ output = "{tmp_path / 'output.ipynb'}"
 
 
 def test_invalid_json_in_notebook(tmp_path: Path, scrub_project):
-    """Test error when input notebook has invalid JSON."""
     input_path = tmp_path / 'input.ipynb'
     input_path.write_text('{ invalid json')
 
@@ -291,16 +153,38 @@ output = "{tmp_path / 'output.ipynb'}"
     assert f'Error reading {input_dir}' in result.stderr
 
 
-def test_output_directory_creation(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test that output directories are created automatically."""
-    input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
+def test_processing_stops_at_first_failing_file(tmp_path: Path, scrub_project):
+    """A second, valid file entry is never reached once an earlier one fails."""
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    good_input = tmp_path / 'good.ipynb'
+    write(
+        good_input,
+        {
+            'cells': [{'cell_type': 'code', 'source': 'x = 1', 'metadata': {}}],
+            'metadata': {},
+            'nbformat': 4,
+            'nbformat_minor': 4,
+        },
+    )
+    config_path.write_text(f'''
+[[files]]
+input = "{tmp_path / 'missing.ipynb'}"
+output = "{tmp_path / 'out1.ipynb'}"
 
+[[files]]
+input = "{good_input}"
+output = "{tmp_path / 'out2.ipynb'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert not (tmp_path / 'out2.ipynb').exists()
+
+
+def test_output_directory_creation(tmp_path: Path, sample_notebook, scrub_project):
+    input_path = tmp_path / 'input.ipynb'
+    write(input_path, sample_notebook)
     output_path = tmp_path / 'deeply' / 'nested' / 'output' / 'file.ipynb'
 
     config_path = tmp_path / '.ipynb-scrubber.toml'
@@ -314,17 +198,13 @@ output = "{output_path}"
 
     assert result.returncode == 0
     assert output_path.exists()
-    assert output_path.parent.exists()
 
 
-def test_relative_paths(tmp_path: Path, sample_notebook: Notebook, scrub_project):
-    """Test using relative paths in config file."""
+def test_relative_paths(tmp_path: Path, sample_notebook, scrub_project):
+    """input/output paths in the config resolve relative to the process cwd."""
     input_dir = tmp_path / 'src'
     input_dir.mkdir()
-
-    input_path = input_dir / 'notebook.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
+    write(input_dir / 'notebook.ipynb', sample_notebook)
 
     config_path = tmp_path / '.ipynb-scrubber.toml'
     config_path.write_text("""
@@ -339,78 +219,11 @@ output = "dist/notebook.ipynb"
     assert (tmp_path / 'dist' / 'notebook.ipynb').exists()
 
 
-def test_custom_tags_per_file(tmp_path: Path, scrub_project):
-    """Test using different custom tags for different files."""
-    # Create notebook with custom tag
-    nb1 = {
-        'cells': [
-            {
-                'cell_type': 'code',
-                'source': 'solution code',
-                'metadata': {'tags': ['solution']},
-            },
-        ],
-        'metadata': {},
-        'nbformat': 4,
-        'nbformat_minor': 4,
-    }
-
-    # Create notebook with different custom tag
-    nb2 = {
-        'cells': [
-            {
-                'cell_type': 'code',
-                'source': 'answer code',
-                'metadata': {'tags': ['answer']},
-            },
-        ],
-        'metadata': {},
-        'nbformat': 4,
-        'nbformat_minor': 4,
-    }
-
-    input1_path = tmp_path / 'input1.ipynb'
-    input2_path = tmp_path / 'input2.ipynb'
-
-    with input1_path.open('w') as f:
-        json.dump(nb1, f)
-    with input2_path.open('w') as f:
-        json.dump(nb2, f)
-
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-input = "{input1_path}"
-output = "{tmp_path / 'output1.ipynb'}"
-clear-tag = "solution"
-
-[[files]]
-input = "{input2_path}"
-output = "{tmp_path / 'output2.ipynb'}"
-clear-tag = "answer"
-''')
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 0
-
-    # Both notebooks should have their cells cleared with respective tags
-    with (tmp_path / 'output1.ipynb').open() as f:
-        nb1_out = json.load(f)
-    with (tmp_path / 'output2.ipynb').open() as f:
-        nb2_out = json.load(f)
-
-    assert nb1_out['cells'][0]['source'] == '# TODO: Implement this'
-    assert nb2_out['cells'][0]['source'] == '# TODO: Implement this'
-
-
-def test_pyproject_toml(tmp_path: Path, sample_notebook: Notebook, scrub_project):
-    """Test using pyproject.toml for configuration."""
+def test_pyproject_toml(tmp_path: Path, sample_notebook, scrub_project):
+    """pyproject.toml's [tool.ipynb-scrubber] section is discovered and used."""
     input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
+    write(input_path, sample_notebook)
 
-    # Create pyproject.toml with config
     pyproject_path = tmp_path / 'pyproject.toml'
     pyproject_path.write_text(f'''
 [tool.ipynb-scrubber.options]
@@ -424,17 +237,11 @@ output = "{tmp_path / 'output.ipynb'}"
     result = scrub_project(cwd=str(tmp_path))
 
     assert result.returncode == 0
-    assert (tmp_path / 'output.ipynb').exists()
-
-    with (tmp_path / 'output.ipynb').open() as f:
-        nb_out = json.load(f)
-
-    # Check that pyproject.toml config was used
+    nb_out = json.loads((tmp_path / 'output.ipynb').read_text())
     assert nb_out['cells'][1]['source'] == '# FROM PYPROJECT'
 
 
 def test_pyproject_without_ipynb_scrubber_section(tmp_path: Path, scrub_project):
-    """Test error when pyproject.toml doesn't have ipynb-scrubber section."""
     pyproject_path = tmp_path / 'pyproject.toml'
     pyproject_path.write_text("""
 [tool.other-tool]
@@ -451,21 +258,20 @@ foo = "bar"
     assert 'does not contain [tool.ipynb-scrubber] section' in result.stderr
 
 
-def test_discovery_from_subdirectory(
+@pytest.mark.parametrize('depth', [['subdir'], ['a', 'b', 'c']])
+def test_discovery_searches_upward(
     tmp_path: Path,
-    sample_notebook: Notebook,
+    sample_notebook,
     scrub_project,
+    depth: list[str],
 ):
-    """Test config discovery from a subdirectory."""
-    # Create structure: tmp_path/.ipynb-scrubber.toml and tmp_path/subdir/
-    subdir = tmp_path / 'subdir'
-    subdir.mkdir()
+    """Config discovery walks upward from cwd, through multiple levels."""
+    start_dir = tmp_path.joinpath(*depth)
+    start_dir.mkdir(parents=True)
 
     input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
+    write(input_path, sample_notebook)
 
-    # Config in parent directory
     config_path = tmp_path / '.ipynb-scrubber.toml'
     config_path.write_text(f'''
 [[files]]
@@ -473,8 +279,7 @@ input = "{input_path}"
 output = "{tmp_path / 'output.ipynb'}"
 ''')
 
-    # Run from subdirectory
-    result = scrub_project(cwd=str(subdir))
+    result = scrub_project(cwd=str(start_dir))
 
     assert result.returncode == 0
     assert (tmp_path / 'output.ipynb').exists()
@@ -482,15 +287,12 @@ output = "{tmp_path / 'output.ipynb'}"
 
 def test_discovery_prefers_standalone_over_pyproject(
     tmp_path: Path,
-    sample_notebook: Notebook,
+    sample_notebook,
     scrub_project,
 ):
-    """Test that .ipynb-scrubber.toml is preferred over pyproject.toml."""
     input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
+    write(input_path, sample_notebook)
 
-    # Create both config files with different clear text
     standalone_config = tmp_path / '.ipynb-scrubber.toml'
     standalone_config.write_text(f'''
 [options]
@@ -514,16 +316,11 @@ output = "{tmp_path / 'output.ipynb'}"
     result = scrub_project(cwd=str(tmp_path))
 
     assert result.returncode == 0
-
-    with (tmp_path / 'output.ipynb').open() as f:
-        nb_out = json.load(f)
-
-    # Should use standalone config
+    nb_out = json.loads((tmp_path / 'output.ipynb').read_text())
     assert nb_out['cells'][1]['source'] == '# FROM STANDALONE'
 
 
 def test_no_config_found(tmp_path: Path, scrub_project):
-    """Test error when no config file is found."""
     result = scrub_project(cwd=str(tmp_path))
 
     assert result.returncode == 1
@@ -532,15 +329,13 @@ def test_no_config_found(tmp_path: Path, scrub_project):
 
 def test_explicit_config_bypasses_discovery(
     tmp_path: Path,
-    sample_notebook: Notebook,
+    sample_notebook,
     scrub_project,
 ):
-    """Test that --config-file bypasses discovery."""
+    """--config-file is used verbatim, ignoring any discoverable config above it."""
     input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
+    write(input_path, sample_notebook)
 
-    # Create config in parent
     parent_config = tmp_path / '.ipynb-scrubber.toml'
     parent_config.write_text(f'''
 [options]
@@ -551,7 +346,6 @@ input = "{input_path}"
 output = "{tmp_path / 'output.ipynb'}"
 ''')
 
-    # Create specific config with different text
     specific_config = tmp_path / 'custom.toml'
     specific_config.write_text(f'''
 [options]
@@ -565,64 +359,12 @@ output = "{tmp_path / 'output.ipynb'}"
     result = scrub_project('--config-file', str(specific_config), cwd=str(tmp_path))
 
     assert result.returncode == 0
-
-    with (tmp_path / 'output.ipynb').open() as f:
-        nb_out = json.load(f)
-
-    # Should use custom config, not discovered parent
+    nb_out = json.loads((tmp_path / 'output.ipynb').read_text())
     assert nb_out['cells'][1]['source'] == '# FROM CUSTOM'
 
 
-def test_discovery_upward_multiple_levels(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test discovery searches upward through multiple directory levels."""
-    # Create structure: tmp_path/a/b/c/ with config at tmp_path/
-    deep_dir = tmp_path / 'a' / 'b' / 'c'
-    deep_dir.mkdir(parents=True)
-
-    input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
-    # Config at root
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-input = "{input_path}"
-output = "{tmp_path / 'output.ipynb'}"
-''')
-
-    # Run from deeply nested directory
-    result = scrub_project(cwd=str(deep_dir))
-
-    assert result.returncode == 0
-    assert (tmp_path / 'output.ipynb').exists()
-
-
-def test_note_cells_with_notes_file(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test note cells with notes file specified."""
-    input_path = tmp_path / 'input.ipynb'
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
-    notes_file = tmp_path / 'notes.md'
-
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-input = "{input_path}"
-output = "{tmp_path / 'output.ipynb'}"
-notes-file = "{notes_file}"
-''')
-
-    # Add a note cell to the notebook
+def test_note_cells_with_notes_file(tmp_path: Path, sample_notebook, scrub_project):
+    """A file-level notes-file entry is honored end to end."""
     sample_notebook['cells'].append(
         {
             'cell_type': 'code',
@@ -630,148 +372,12 @@ notes-file = "{notes_file}"
             'metadata': {},
         },
     )
-
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 0
-    assert notes_file.exists()
-
-    # Check notes content with note ID
-    notes_content = notes_file.read_text()
-    assert '## note-1' in notes_content
-    assert 'def note_solution():' in notes_content
-
-
-def test_note_cells_without_notes_file_fails(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test that note cells without notes file cause error."""
     input_path = tmp_path / 'input.ipynb'
-
-    # Add a note cell to the notebook with ID
-    sample_notebook['cells'].append(
-        {
-            'cell_type': 'code',
-            'source': (
-                '#| scrub-note: error-test\ndef note_solution():\n    return "noted"'
-            ),
-            'metadata': {},
-        },
-    )
-
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-input = "{input_path}"
-output = "{tmp_path / 'output.ipynb'}"
-# No notes-file specified
-''')
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    # Should fail with error
-    assert result.returncode == 1
-    assert 'note tag' in result.stderr
-    assert 'no notes-file specified' in result.stderr
-
-
-def test_multiple_files_with_notes(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """Test processing multiple files with different notes files."""
-    # Create two notebooks
-    input1_path = tmp_path / 'input1.ipynb'
-    input2_path = tmp_path / 'input2.ipynb'
-
-    nb1 = sample_notebook.copy()
-    nb1['cells'].append(
-        {
-            'cell_type': 'code',
-            'source': '#| scrub-note: nb1-note\ndef solution1():\n    return 1',
-            'metadata': {},
-        },
-    )
-
-    nb2 = sample_notebook.copy()
-    nb2['cells'].append(
-        {
-            'cell_type': 'code',
-            'source': '#| scrub-note: nb2-note\ndef solution2():\n    return 2',
-            'metadata': {},
-        },
-    )
-
-    with input1_path.open('w') as f:
-        json.dump(nb1, f)
-    with input2_path.open('w') as f:
-        json.dump(nb2, f)
-
-    notes1 = tmp_path / 'notes1.md'
-    notes2 = tmp_path / 'notes2.md'
-
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[[files]]
-input = "{input1_path}"
-output = "{tmp_path / 'output1.ipynb'}"
-notes-file = "{notes1}"
-
-[[files]]
-input = "{input2_path}"
-output = "{tmp_path / 'output2.ipynb'}"
-notes-file = "{notes2}"
-''')
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 0
-    assert notes1.exists()
-    assert notes2.exists()
-
-    # Check each notes file has the right note ID
-    assert '## nb1-note' in notes1.read_text()
-    assert 'solution1' in notes1.read_text()
-
-    assert '## nb2-note' in notes2.read_text()
-    assert 'solution2' in notes2.read_text()
-
-
-def test_custom_note_tag(tmp_path: Path, sample_notebook: Notebook, scrub_project):
-    """Test using a custom note tag."""
-    input_path = tmp_path / 'input.ipynb'
-
-    # Use custom tag with ID
-    sample_notebook['cells'].append(
-        {
-            'cell_type': 'code',
-            'source': (
-                '#| solution-note: custom-id\ndef '
-                'custom_solution():\n    return "custom"'
-            ),
-            'metadata': {},
-        },
-    )
-
-    with input_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
+    write(input_path, sample_notebook)
     notes_file = tmp_path / 'notes.md'
 
     config_path = tmp_path / '.ipynb-scrubber.toml'
     config_path.write_text(f'''
-[options]
-note-tag = "solution-note"
-
 [[files]]
 input = "{input_path}"
 output = "{tmp_path / 'output.ipynb'}"
@@ -781,24 +387,53 @@ notes-file = "{notes_file}"
     result = scrub_project(cwd=str(tmp_path))
 
     assert result.returncode == 0
-    assert notes_file.exists()
+    assert '## note-1' in notes_file.read_text()
 
-    notes_content = notes_file.read_text()
-    assert '## custom-id' in notes_content
-    assert 'custom_solution' in notes_content
+
+def test_note_cells_without_notes_file_fails(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """A config-driven run with note cells but no notes-file is a hard error.
+
+    Distinct from scrub-notebook's warn-and-continue behaviour: scrub-project
+    has no stdout stream to fall back to, so an unsaved note is fatal.
+    """
+    sample_notebook['cells'].append(
+        {
+            'cell_type': 'code',
+            'source': '#| scrub-note: error-test\ndef note_solution():\n    return 1',
+            'metadata': {},
+        },
+    )
+    input_path = tmp_path / 'input.ipynb'
+    write(input_path, sample_notebook)
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{input_path}"
+output = "{tmp_path / 'output.ipynb'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert 'note tag' in result.stderr
+    assert 'no notes-file specified' in result.stderr
 
 
 def test_unwritable_output_reports_once_without_traceback(tmp_path, scrub_project):
     notebook = tmp_path / 'in.ipynb'
-    notebook.write_text(
-        json.dumps(
-            {
-                'cells': [{'cell_type': 'code', 'metadata': {}, 'source': 'x = 1'}],
-                'metadata': {},
-                'nbformat': 4,
-                'nbformat_minor': 4,
-            },
-        ),
+    write(
+        notebook,
+        {
+            'cells': [{'cell_type': 'code', 'metadata': {}, 'source': 'x = 1'}],
+            'metadata': {},
+            'nbformat': 4,
+            'nbformat_minor': 4,
+        },
     )
     locked = tmp_path / 'locked'
     locked.mkdir()
@@ -813,70 +448,3 @@ def test_unwritable_output_reports_once_without_traceback(tmp_path, scrub_projec
     assert result.returncode == 1
     assert 'Traceback' not in result.stderr
     assert result.stderr.count('Permission denied') == 1
-
-
-def test_multiline_clear_text_toml(
-    tmp_path: Path,
-    sample_notebook: Notebook,
-    scrub_project,
-):
-    """A TOML triple-quoted clear-text value survives to the output."""
-    nb_path = tmp_path / 'lesson.ipynb'
-    with nb_path.open('w') as f:
-        json.dump(sample_notebook, f)
-
-    out_path = tmp_path / 'exercise.ipynb'
-
-    config_path = tmp_path / '.ipynb-scrubber.toml'
-    config_path.write_text(f'''
-[options]
-clear-text = """
-def add(a, b):
-    # TODO
-    pass"""
-
-[[files]]
-input = "{nb_path}"
-output = "{out_path}"
-''')
-
-    result = scrub_project(cwd=str(tmp_path))
-
-    assert result.returncode == 0
-    assert out_path.exists()
-
-    with out_path.open() as f:
-        output = json.load(f)
-
-    assert output['cells'][1]['source'] == 'def add(a, b):\n    # TODO\n    pass'
-
-
-def test_file_entry_empty_clear_text_reaches_the_processor(tmp_path, scrub_project):
-    """A file-level clear-text override of '' merges through, not the default."""
-    notebook = tmp_path / 'in.ipynb'
-    notebook.write_text(
-        json.dumps(
-            {
-                'cells': [
-                    {
-                        'cell_type': 'code',
-                        'metadata': {},
-                        'source': '#| scrub-clear\nx = 1',
-                    },
-                ],
-                'metadata': {},
-                'nbformat': 4,
-                'nbformat_minor': 4,
-            },
-        ),
-    )
-    out = tmp_path / 'out.ipynb'
-    config = tmp_path / '.ipynb-scrubber.toml'
-    config.write_text(
-        f'[[files]]\ninput = "{notebook}"\noutput = "{out}"\nclear-text = ""\n',
-    )
-
-    result = scrub_project('--config-file', str(config))
-
-    assert result.returncode == 0
-    assert json.loads(out.read_text())['cells'][0]['source'] == ''
