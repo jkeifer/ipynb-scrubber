@@ -2,11 +2,35 @@ from __future__ import annotations
 
 import tomllib
 
-from dataclasses import dataclass, field
+from collections.abc import Collection
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from .exceptions import ScrubberError
+
+
+def reject_unknown_keys(
+    data: dict[str, Any],
+    valid: Collection[str],
+    label: str,
+) -> None:
+    """Raise if ``data`` carries a key outside ``valid``.
+
+    Config keys are a closed, enumerable set, so a typo is always a mistake
+    rather than a forward-compatible extension. Silently dropping one is
+    especially bad here: a misspelled ``clear-tag`` means solution cells are
+    not scrubbed at all.
+
+    Raises:
+        ScrubberError: If any key is unrecognised.
+    """
+    unknown = sorted(set(data) - set(valid))
+    if unknown:
+        raise ScrubberError(
+            f'Unknown {label}(s): {", ".join(unknown)}. '
+            f'Valid {label}s: {", ".join(sorted(valid))}',
+        )
 
 
 def find_config_file(start_dir: Path | None = None) -> Path | None:
@@ -63,14 +87,28 @@ class ScrubbingOptions:
     omit_tag: str = 'scrub-omit'
     note_tag: str = 'scrub-note'
 
+    #: TOML key -> dataclass field name. The single source of truth for
+    #: which options exist and what they are called in config files.
+    KEYS: ClassVar[dict[str, str]] = {
+        'clear-tag': 'clear_tag',
+        'clear-text': 'clear_text',
+        'omit-tag': 'omit_tag',
+        'note-tag': 'note_tag',
+    }
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
-        """Create GlobalOptions from dictionary."""
+        """Create ScrubbingOptions from a config mapping.
+
+        Keys absent from ``data`` keep their dataclass default; a key that
+        is present is used verbatim, including an empty string.
+
+        Raises:
+            ScrubberError: If ``data`` contains an unrecognised key.
+        """
+        reject_unknown_keys(data, cls.KEYS, 'option')
         return cls(
-            clear_tag=data.get('clear-tag', 'scrub-clear'),
-            clear_text=data.get('clear-text', '# TODO: Implement this'),
-            omit_tag=data.get('omit-tag', 'scrub-omit'),
-            note_tag=data.get('note-tag', 'scrub-note'),
+            **{field: data[key] for key, field in cls.KEYS.items() if key in data},
         )
 
 
@@ -80,15 +118,27 @@ class FileEntry:
 
     input: Path
     output: Path
-    clear_tag: str | None = None
-    clear_text: str | None = None
-    omit_tag: str | None = None
-    note_tag: str | None = None
     notes_file: Path | None = None
+    overrides: dict[str, Any] = field(default_factory=dict)
+
+    #: TOML keys a file entry accepts beyond the ScrubbingOptions keys.
+    OWN_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {'input', 'output', 'notes-file'},
+    )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
-        """Create FileEntry from dictionary."""
+        """Create FileEntry from dictionary.
+
+        Raises:
+            ScrubberError: If input or output is missing, or a key is
+                unrecognised.
+        """
+        reject_unknown_keys(
+            data,
+            cls.OWN_KEYS | ScrubbingOptions.KEYS.keys(),
+            'file entry key',
+        )
         if 'input' not in data:
             raise ScrubberError('File entry missing required field: input')
         if 'output' not in data:
@@ -98,21 +148,21 @@ class FileEntry:
         return cls(
             input=Path(data['input']),
             output=Path(data['output']),
-            clear_tag=data.get('clear-tag'),
-            clear_text=data.get('clear-text'),
-            omit_tag=data.get('omit-tag'),
-            note_tag=data.get('note-tag'),
             notes_file=Path(notes_file) if notes_file else None,
+            overrides={
+                field_name: data[key]
+                for key, field_name in ScrubbingOptions.KEYS.items()
+                if key in data
+            },
         )
 
     def get_options(self, global_options: ScrubbingOptions) -> ScrubbingOptions:
-        """Get merged options for this file (file-specific overrides global)."""
-        return ScrubbingOptions(
-            clear_tag=self.clear_tag or global_options.clear_tag,
-            clear_text=self.clear_text or global_options.clear_text,
-            omit_tag=self.omit_tag or global_options.omit_tag,
-            note_tag=self.note_tag or global_options.note_tag,
-        )
+        """Merge this file's overrides over the global options.
+
+        Presence-based, not truthiness-based: a file that explicitly sets
+        ``clear-text = ""`` gets an empty string, not the global default.
+        """
+        return replace(global_options, **self.overrides)
 
 
 @dataclass
@@ -122,20 +172,27 @@ class ProjectConfig:
     global_options: ScrubbingOptions = field(default_factory=ScrubbingOptions)
     files: list[FileEntry] = field(default_factory=list)
 
+    TOP_LEVEL_KEYS: ClassVar[frozenset[str]] = frozenset({'options', 'files'})
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
-        """Create ProjectConfig from dictionary."""
-        global_options = ScrubbingOptions.from_dict(
-            data.get('options', {}),
-        )
+        """Create ProjectConfig from dictionary.
+
+        Raises:
+            ScrubberError: If a key is unrecognised or no file entries exist.
+        """
+        reject_unknown_keys(data, cls.TOP_LEVEL_KEYS, 'config key')
+
+        global_options = ScrubbingOptions.from_dict(data.get('options', {}))
 
         files_data = data.get('files', [])
         if not files_data:
             raise ScrubberError('Config file must contain at least one file entry')
 
-        files = [FileEntry.from_dict(f) for f in files_data]
-
-        return cls(global_options=global_options, files=files)
+        return cls(
+            global_options=global_options,
+            files=[FileEntry.from_dict(f) for f in files_data],
+        )
 
     @classmethod
     def from_file(cls, config_path: Path) -> Self:

@@ -12,6 +12,8 @@ from .exceptions import ScrubberError
 from .notes import write_notes_file
 from .processor import process_notebook
 
+_DEFAULTS = ScrubbingOptions()
+
 
 def printe(*args, **kwargs) -> None:
     print(*args, file=sys.stderr, **kwargs)  # noqa: T201
@@ -91,22 +93,22 @@ class ScrubNotebook:
     def set_args(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             '--clear-tag',
-            default='scrub-clear',
+            default=_DEFAULTS.clear_tag,
             help='Tag marking cells to clear',
         )
         parser.add_argument(
             '--clear-text',
-            default='# TODO: Implement this',
+            default=_DEFAULTS.clear_text,
             help='Text for cleared cells where unspecified',
         )
         parser.add_argument(
             '--omit-tag',
-            default='scrub-omit',
+            default=_DEFAULTS.omit_tag,
             help='Tag marking cells to omit entirely',
         )
         parser.add_argument(
             '--note-tag',
-            default='scrub-note',
+            default=_DEFAULTS.note_tag,
             help='Tag marking cells to save to notes',
         )
         parser.add_argument(
