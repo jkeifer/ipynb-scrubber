@@ -21,19 +21,71 @@ class Option:
     """A scrubber option parsed from a cell's option header.
 
     Attributes:
-        inline: Text written on the option line itself. None when the option
-            was written with no ``:`` at all (e.g. ``#| scrub-clear``), which
+        name: The option name, used in error messages.
+        raw_inline: Text written on the option line itself, verbatim —
+            escape sequences are NOT expanded. None when the option was
+            written with no ``:`` at all (e.g. ``#| scrub-clear``), which
             means "use the configured default".
         block: Content of an attached ``|`` block, or None if there was none.
+
+    Escapes are expanded lazily, by ``inline`` and ``fields``, so that
+    consumers which split the value on ``|`` split *before* ``\\|`` has
+    become an ordinary pipe.
     """
 
-    inline: str | None = None
+    name: str
+    raw_inline: str | None = None
     block: str | None = None
 
     @property
-    def value(self) -> str | None:
-        """Resolved replacement text, or None to use the configured default."""
+    def inline(self) -> str | None:
+        """The inline value, stripped and unescaped."""
+        if self.raw_inline is None:
+            return None
+        return unescape(self.raw_inline.strip())
+
+    def fields(self, count: int) -> list[str]:
+        """Split the inline value on unescaped pipes into at most ``count`` parts.
+
+        Each part is stripped and unescaped afterwards, so ``\\|`` survives
+        as a literal pipe inside a field instead of acting as a separator.
+        """
+        if self.raw_inline is None:
+            return []
+
+        parts: list[str] = []
+        current: list[str] = []
+        index = 0
+        while index < len(self.raw_inline):
+            char = self.raw_inline[index]
+            if char == '\\' and index + 1 < len(self.raw_inline):
+                current.append(self.raw_inline[index : index + 2])
+                index += 2
+                continue
+            if char == '|' and len(parts) < count - 1:
+                parts.append(''.join(current))
+                current = []
+                index += 1
+                continue
+            current.append(char)
+            index += 1
+        parts.append(''.join(current))
+
+        return [unescape(part.strip()) for part in parts]
+
+    def single_text(self) -> str | None:
+        """The one text value this option carries, or None for the default.
+
+        Raises:
+            ProcessingError: If inline text and a block are both present.
+        """
         if self.block is not None:
+            if self.raw_inline and self.raw_inline.strip():
+                raise ProcessingError(
+                    f"Option '{self.name}' has both inline text and a block: "
+                    "the trailing '|' opens a block. Use one or the other, or "
+                    "escape a literal pipe as '\\|'",
+                )
             return self.block
         return self.inline
 
@@ -105,16 +157,16 @@ def _indent_of(text: str) -> int:
     return len(text) - len(text.lstrip())
 
 
-def _build_option(raw_value: str | None, block: str | None) -> Option:
+def _build_option(name: str, raw_value: str | None, block: str | None) -> Option:
     """Build an Option from a raw inline value and optional block content."""
     if raw_value is None:
-        return Option(inline=None, block=block)
+        return Option(name=name, raw_inline=None, block=block)
 
-    inline = raw_value
+    raw_inline = raw_value
     if block is not None:
         # Drop the trailing pipe that opened the block.
-        inline = inline.rstrip()[:-1]
-    return Option(inline=unescape(inline.strip()), block=block)
+        raw_inline = raw_inline.rstrip()[:-1]
+    return Option(name=name, raw_inline=raw_inline, block=block)
 
 
 def _parse_code_options(source: str) -> dict[str, Option]:
@@ -155,7 +207,7 @@ def _parse_code_options(source: str) -> dict[str, Option]:
                 index += 1
             block = dedent_block(block_lines)
 
-        options[name] = _build_option(raw_value, block)
+        options[name] = _build_option(name, raw_value, block)
 
     return options
 
@@ -199,7 +251,7 @@ def _parse_markdown_options(source: str) -> dict[str, Option]:
                 )
             block = dedent_block(block_lines)
 
-        options[name] = _build_option(raw_value, block)
+        options[name] = _build_option(name, raw_value, block)
 
     return options
 

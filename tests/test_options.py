@@ -65,23 +65,25 @@ def test_dedent_block_empty() -> None:
 
 def test_code_option_no_value() -> None:
     options = parse_cell_options('code', '#| scrub-clear\nprint("x")')
-    assert options == {'scrub-clear': Option(inline=None, block=None)}
-    assert options['scrub-clear'].value is None
+    assert options == {
+        'scrub-clear': Option(name='scrub-clear', raw_inline=None, block=None),
+    }
+    assert options['scrub-clear'].single_text() is None
 
 
 def test_code_option_inline_value() -> None:
     options = parse_cell_options('code', '#| scrub-clear: hello\nprint("x")')
-    assert options['scrub-clear'].value == 'hello'
+    assert options['scrub-clear'].single_text() == 'hello'
 
 
 def test_code_option_empty_value() -> None:
     options = parse_cell_options('code', '#| scrub-clear:\nprint("x")')
-    assert options['scrub-clear'].value == ''
+    assert options['scrub-clear'].single_text() == ''
 
 
 def test_code_option_inline_escapes() -> None:
     options = parse_cell_options('code', r'#| scrub-clear: a\nb')
-    assert options['scrub-clear'].value == 'a\nb'
+    assert options['scrub-clear'].single_text() == 'a\nb'
 
 
 def test_code_block() -> None:
@@ -95,7 +97,7 @@ def test_code_block() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == 'def add(a, b):\n    pass'
+    assert options['scrub-clear'].single_text() == 'def add(a, b):\n    pass'
 
 
 def test_code_block_is_verbatim() -> None:
@@ -106,7 +108,7 @@ def test_code_block_is_verbatim() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == r're.match(r"\d+\n", s)'
+    assert options['scrub-clear'].single_text() == r're.match(r"\d+\n", s)'
 
 
 def test_code_block_ragged_dedents_by_minimum() -> None:
@@ -118,7 +120,7 @@ def test_code_block_ragged_dedents_by_minimum() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == '    # TODO: the hard part\nx = 1'
+    assert options['scrub-clear'].single_text() == '    # TODO: the hard part\nx = 1'
 
 
 def test_code_block_interior_blank_line() -> None:
@@ -131,12 +133,12 @@ def test_code_block_interior_blank_line() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == 'a\n\nb'
+    assert options['scrub-clear'].single_text() == 'a\n\nb'
 
 
 def test_code_block_empty() -> None:
     options = parse_cell_options('code', '#| scrub-clear: |\nprint("x")')
-    assert options['scrub-clear'].value == ''
+    assert options['scrub-clear'].single_text() == ''
 
 
 def test_code_block_terminated_by_option_at_key_indent() -> None:
@@ -149,7 +151,7 @@ def test_code_block_terminated_by_option_at_key_indent() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == 'line one\nline two'
+    assert options['scrub-clear'].single_text() == 'line one\nline two'
     assert 'scrub-omit' in options
 
 
@@ -161,7 +163,7 @@ def test_code_block_content_is_not_parsed_as_options() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == 'scrub-omit'
+    assert options['scrub-clear'].single_text() == 'scrub-omit'
     assert 'scrub-omit' not in options
 
 
@@ -174,7 +176,7 @@ def test_code_block_terminated_by_non_option_line() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == 'line one'
+    assert options['scrub-clear'].single_text() == 'line one'
 
 
 def test_code_note_block_strips_one_pipe() -> None:
@@ -198,7 +200,7 @@ def test_code_escaped_pipe_does_not_open_block() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == '# fill in |'
+    assert options['scrub-clear'].single_text() == '# fill in |'
     assert options['scrub-clear'].block is None
 
 
@@ -214,7 +216,7 @@ def test_code_options_survive_blank_lines_in_the_header() -> None:
         ],
     )
     options = parse_cell_options('code', source)
-    assert options['scrub-clear'].value == 'hello'
+    assert options['scrub-clear'].single_text() == 'hello'
     assert 'scrub-omit' in options
 
 
@@ -229,12 +231,12 @@ def test_raw_cell_has_no_options() -> None:
 
 def test_markdown_option_no_value() -> None:
     options = parse_cell_options('markdown', '<!-- scrub-clear -->\n## Q')
-    assert options['scrub-clear'].value is None
+    assert options['scrub-clear'].single_text() is None
 
 
 def test_markdown_option_inline_value() -> None:
     options = parse_cell_options('markdown', '<!-- scrub-clear: **Answer** -->\n## Q')
-    assert options['scrub-clear'].value == '**Answer**'
+    assert options['scrub-clear'].single_text() == '**Answer**'
 
 
 def test_markdown_block() -> None:
@@ -249,7 +251,7 @@ def test_markdown_block() -> None:
         ],
     )
     options = parse_cell_options('markdown', source)
-    assert options['scrub-clear'].value == (
+    assert options['scrub-clear'].single_text() == (
         '**Write your answer here**\n\nShow your work.'
     )
 
@@ -283,7 +285,7 @@ def test_markdown_block_unterminated_message_does_not_claim_an_option() -> None:
 
 def test_markdown_closed_comment_is_never_a_block() -> None:
     options = parse_cell_options('markdown', '<!-- scrub-clear: | -->\n## Q')
-    assert options['scrub-clear'].value == '|'
+    assert options['scrub-clear'].single_text() == '|'
     assert options['scrub-clear'].block is None
 
 
@@ -296,5 +298,42 @@ def test_markdown_block_content_is_not_parsed_as_options() -> None:
         ],
     )
     options = parse_cell_options('markdown', source)
-    assert options['scrub-clear'].value == '<!-- scrub-omit -->'
+    assert options['scrub-clear'].single_text() == '<!-- scrub-omit -->'
     assert 'scrub-omit' not in options
+
+
+@pytest.mark.parametrize(
+    ('raw', 'count', 'expected'),
+    [
+        ('ex-1', 2, ['ex-1']),
+        ('ex-1 | text', 2, ['ex-1', 'text']),
+        ('ex-1|text', 2, ['ex-1', 'text']),
+        (r'a\|b', 2, ['a|b']),
+        (r'a\|b | text', 2, ['a|b', 'text']),
+        ('a | b | c', 2, ['a', 'b | c']),
+        (r'\|only', 2, ['|only']),
+        (None, 2, []),
+    ],
+)
+def test_option_fields_splits_on_unescaped_pipes(raw, count, expected):
+    assert Option(name='scrub-note', raw_inline=raw).fields(count) == expected
+
+
+def test_option_single_text_prefers_block():
+    assert (
+        Option(name='scrub-clear', raw_inline='', block='body').single_text() == 'body'
+    )
+
+
+def test_option_single_text_unescapes_inline():
+    assert Option(name='scrub-clear', raw_inline=r'a\nb').single_text() == 'a\nb'
+
+
+def test_option_single_text_none_when_no_colon():
+    assert Option(name='scrub-clear').single_text() is None
+
+
+def test_option_single_text_rejects_inline_plus_block():
+    option = Option(name='scrub-clear', raw_inline='hello', block='body')
+    with pytest.raises(ProcessingError, match=r'scrub-clear'):
+        option.single_text()
