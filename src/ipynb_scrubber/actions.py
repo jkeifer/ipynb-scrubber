@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import assert_never
 
 from .config import ScrubbingOptions
 from .exceptions import ProcessingError
@@ -33,7 +34,12 @@ class Note:
     text: str
 
 
-CellAction = Omit | Keep | Clear | Note
+#: What can happen to a cell that survives into the output. ``apply`` accepts
+#: exactly these, so "an omitted cell is never rewritten" is a type, not a
+#: comment.
+CellRewrite = Keep | Clear | Note
+
+CellAction = Omit | CellRewrite
 
 
 def _note_action(option: Option, opts: ScrubbingOptions) -> Note:
@@ -116,18 +122,30 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     return Keep()
 
 
-def apply(cell: Cell, action: CellAction) -> Cell:
-    """Apply a decided action to a cell, in place."""
-    cell.pop('outputs', None)
-    cell.pop('execution_count', None)
+def apply(cell: Cell, action: CellRewrite) -> Cell:
+    """Return a new cell with ``action`` applied; ``cell`` is left alone.
+
+    The copy is shallow, and that is provably enough: the only keys touched
+    are dropped outright ('outputs', 'execution_count') or rebound to a fresh
+    string ('source'). Nothing still shared with the input is mutated, and the
+    outputs a deep copy would have duplicated are exactly what gets discarded.
+
+    ``Omit`` is not accepted: an omitted cell has no output form, so the
+    caller drops it rather than asking for one.
+    """
+    updated: Cell = {**cell}
+    updated.pop('outputs', None)
+    updated.pop('execution_count', None)
 
     match action:
+        case Keep():
+            pass
         case Clear(text=text):
-            cell['source'] = text
+            updated['source'] = text
         case Note(note_id=note_id, text=text):
             suffix = f'\n{text}' if text else ''
-            cell['source'] = f'# (See notes: {note_id}){suffix}'
-        case Omit() | Keep():
-            pass
+            updated['source'] = f'# (See notes: {note_id}){suffix}'
+        case _:
+            assert_never(action)
 
-    return cell
+    return updated

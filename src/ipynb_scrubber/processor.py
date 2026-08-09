@@ -12,6 +12,11 @@ def process_notebook(
 ) -> tuple[Notebook, dict[str, str]]:
     """Process a notebook to create an exercise version.
 
+    The input notebook is never touched. Cells are copied before they are
+    rewritten and a fresh top-level dict is returned, so a failure part way
+    through leaves the caller holding their original notebook rather than a
+    half-scrubbed one.
+
     Args:
         notebook: The input notebook to process
         scrub_options: Scrubbing options containing tags and default text
@@ -24,13 +29,13 @@ def process_notebook(
         InvalidNotebookError: If the notebook structure is invalid
         ProcessingError: If an error occurs during processing
     """
-    validate_notebook(notebook)
+    validated = validate_notebook(notebook)
 
-    notes: dict[str, str] = {}
-    note_origin: dict[str, int] = {}
+    # note_id -> (index of the cell that claimed it, that cell's source)
+    notes: dict[str, tuple[int, str]] = {}
     processed: list[Cell] = []
 
-    for index, cell in enumerate(notebook.get('cells', [])):
+    for index, cell in enumerate(validated['cells']):
         try:
             action = decide(cell, scrub_options)
 
@@ -38,24 +43,22 @@ def process_notebook(
                 continue
 
             if isinstance(action, Note):
-                if action.note_id in notes:
+                claimed_by = notes.get(action.note_id)
+                if claimed_by is not None:
                     raise ProcessingError(
                         f"Duplicate note id '{action.note_id}'; already used "
-                        f'by cell {note_origin[action.note_id]}. Note ids '
+                        f'by cell {claimed_by[0]}. Note ids '
                         'must be unique within a notebook',
                     )
-                note_origin[action.note_id] = index
-                notes[action.note_id] = get_cell_source(cell)
+                notes[action.note_id] = (index, get_cell_source(cell))
 
             processed.append(apply(cell, action))
         except ScrubberError as e:
             raise ProcessingError(f'Cell {index}: {e}') from e
 
-    notebook['cells'] = processed
-    metadata = notebook.get('metadata')
-    if metadata is None:
-        metadata = {}
-        notebook['metadata'] = metadata
-    metadata['exercise_version'] = True
-
-    return notebook, notes
+    result: Notebook = {
+        **validated,
+        'cells': processed,
+        'metadata': {**validated.get('metadata', {}), 'exercise_version': True},
+    }
+    return result, {note_id: source for note_id, (_, source) in notes.items()}

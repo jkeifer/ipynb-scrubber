@@ -126,6 +126,23 @@ def test_apply_strips_outputs_and_execution_count():
     assert result['source'] == 'x = 1'
 
 
+def test_apply_leaves_the_input_cell_alone():
+    """apply builds a new cell, so a later failure cannot half-scrub the input."""
+    target = {
+        'cell_type': 'code',
+        'source': 'x = 1',
+        'outputs': [1],
+        'execution_count': 3,
+    }
+    original = dict(target)
+
+    result = apply(target, Clear('replaced'))
+
+    assert target == original
+    assert result is not target
+    assert result['source'] == 'replaced'
+
+
 def test_apply_note_writes_reference_comment():
     result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', '# TODO'))
     assert result['source'] == '# (See notes: ex-1)\n# TODO'
