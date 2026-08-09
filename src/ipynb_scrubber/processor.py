@@ -35,6 +35,7 @@ def process_notebook(
     validate_notebook(notebook)
 
     notes: dict[str, tuple[str, str]] = {}
+    note_origin: dict[str, int] = {}
     processed: list[Cell] = []
 
     for index, cell in enumerate(notebook.get('cells', [])):
@@ -47,9 +48,11 @@ def process_notebook(
             if isinstance(action, Note):
                 if action.note_id in notes:
                     raise ProcessingError(
-                        f"Duplicate note id '{action.note_id}'; "
-                        'note ids must be unique within a notebook',
+                        f"Duplicate note id '{action.note_id}'; already used "
+                        f'by cell {note_origin[action.note_id]}. Note ids '
+                        'must be unique within a notebook',
                     )
+                note_origin[action.note_id] = index
                 notes[action.note_id] = (
                     cell.get('cell_type', 'code'),
                     get_cell_source(cell),
