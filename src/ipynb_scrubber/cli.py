@@ -9,7 +9,8 @@ from typing import ClassVar, NoReturn, Protocol
 
 from .config import FileEntry, ProjectConfig, ScrubbingOptions
 from .exceptions import ScrubberError
-from .processor import process_notebook, write_notes_file
+from .notes import write_notes_file
+from .processor import process_notebook
 
 
 def printe(*args, **kwargs) -> None:
