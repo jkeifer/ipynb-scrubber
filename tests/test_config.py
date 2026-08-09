@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from ipynb_scrubber.config import FileEntry, ProjectConfig, ScrubbingOptions
@@ -75,3 +77,60 @@ def test_file_entry_requires_input_and_output(missing):
 def test_config_requires_at_least_one_file():
     with pytest.raises(ScrubberError, match='at least one file'):
         ProjectConfig.from_dict({})
+
+
+def test_direct_construction_rejects_bogus_override_key():
+    """A bad override is a ScrubberError, not a TypeError from replace()."""
+    with pytest.raises(ScrubberError, match='file entry override'):
+        FileEntry(
+            input=Path('a.ipynb'),
+            output=Path('b.ipynb'),
+            overrides={'not_a_field': 'x'},
+        )
+
+
+def test_direct_construction_rejects_toml_spelling_as_override_key():
+    """overrides is keyed by field name, so the TOML spelling is invalid."""
+    with pytest.raises(ScrubberError, match='clear-text'):
+        FileEntry(
+            input=Path('a.ipynb'),
+            output=Path('b.ipynb'),
+            overrides={'clear-text': 'x'},
+        )
+
+
+def test_direct_construction_with_valid_overrides_merges():
+    entry = FileEntry(
+        input=Path('a.ipynb'),
+        output=Path('b.ipynb'),
+        overrides={'clear_text': '', 'clear_tag': 'mine'},
+    )
+    merged = entry.get_options(
+        ScrubbingOptions(clear_text='GLOBAL', clear_tag='theirs', omit_tag='keep'),
+    )
+    assert merged.clear_text == ''
+    assert merged.clear_tag == 'mine'
+    assert merged.omit_tag == 'keep'
+
+
+def test_direct_construction_without_overrides_is_valid():
+    entry = FileEntry(input=Path('a.ipynb'), output=Path('b.ipynb'))
+    assert entry.overrides == {}
+    assert entry.get_options(ScrubbingOptions(clear_tag='G')).clear_tag == 'G'
+
+
+def test_override_error_is_distinct_from_toml_key_error():
+    """Each layer names itself so a reader knows which one rejected."""
+    with pytest.raises(ScrubberError) as from_dict_err:
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear_text': 'x'},
+        )
+    with pytest.raises(ScrubberError) as post_init_err:
+        FileEntry(
+            input=Path('a.ipynb'),
+            output=Path('b.ipynb'),
+            overrides={'clear-text': 'x'},
+        )
+
+    assert 'file entry key' in str(from_dict_err.value)
+    assert 'file entry override' in str(post_init_err.value)
