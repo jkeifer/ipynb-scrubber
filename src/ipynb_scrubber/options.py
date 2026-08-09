@@ -17,6 +17,20 @@ _ESCAPES = {
 }
 
 
+def inline_plus_block_message(name: str) -> str:
+    """Shared wording for the inline-text-plus-block conflict.
+
+    Used both by ``Option.single_text`` (e.g. ``scrub-clear``) and by
+    ``actions._note_action`` (``scrub-note``), so a user hitting the same
+    mistake on either option gets identical advice.
+    """
+    return (
+        f"Option '{name}' has both inline text and a block: "
+        "the trailing '|' opens a block. Use one or the other, or "
+        "escape a literal pipe as '\\|'"
+    )
+
+
 @dataclass(frozen=True)
 class Option:
     """A scrubber option parsed from a cell's option header.
@@ -82,11 +96,7 @@ class Option:
         """
         if self.block is not None:
             if self.raw_inline and self.raw_inline.strip():
-                raise ProcessingError(
-                    f"Option '{self.name}' has both inline text and a block: "
-                    "the trailing '|' opens a block. Use one or the other, or "
-                    "escape a literal pipe as '\\|'",
-                )
+                raise ProcessingError(inline_plus_block_message(self.name))
             return self.block
         return self.inline
 
