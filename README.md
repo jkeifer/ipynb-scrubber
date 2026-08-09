@@ -208,7 +208,9 @@ is valid only in code cells; using it elsewhere is an error.
 ### 2. Source-Based Options (Code & Markdown)
 
 Use cell-type-appropriate syntax for more control, including custom replacement
-text:
+text. The option header must be the first non-blank content in the cell's
+source — a `#| scrub-clear` (or `<!-- scrub-clear -->`) preceded by any other
+line is not recognized as an option and is silently left as ordinary source:
 
 #### Code Cells - Quarto Options
 
