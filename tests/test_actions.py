@@ -55,8 +55,15 @@ def test_omit_tag_beats_note_tag():
 
 
 def test_multiple_scrubber_options_in_one_header_error():
-    with pytest.raises(ProcessingError, match=r'only one .* option per cell'):
+    """No block is present, so the block-indentation hint would be nonsense.
+
+    '#| scrub-omit' + '#| scrub-note: ex-1' has no block opener anywhere, so
+    suggesting the reader re-indent a block is wrong advice; the hint must
+    not be appended.
+    """
+    with pytest.raises(ProcessingError, match=r'only one .* option per cell') as exc:
         decide(cell('#| scrub-omit\n#| scrub-note: ex-1\nx = 1'), OPTS)
+    assert 'indent it more deeply' not in str(exc.value)
 
 
 def test_multiple_scrubber_options_catches_underindented_block_content():
@@ -64,9 +71,12 @@ def test_multiple_scrubber_options_catches_underindented_block_content():
 
     '#| scrub-omit' here is indistinguishable from a sibling option at the
     syntax level, and silently deleted the cell before this rule existed.
+    A block is present here, so the indentation hint is relevant and must
+    be appended.
     """
-    with pytest.raises(ProcessingError, match=r'only one .* option per cell'):
+    with pytest.raises(ProcessingError, match=r'only one .* option per cell') as exc:
         decide(cell('#| scrub-clear: |\n#| scrub-omit\nSECRET = 1'), OPTS)
+    assert 'indent it more deeply' in str(exc.value)
 
 
 def test_non_scrubber_sibling_options_are_allowed():
@@ -127,7 +137,15 @@ def test_apply_note_with_empty_text_omits_the_newline():
 
 
 def test_note_inline_text_and_block_conflict_errors():
-    with pytest.raises(ProcessingError, match='has both inline text and a block'):
+    """Wording matches Option.single_text's conflict message (options.py):
+
+    the same mistake on scrub-clear vs scrub-note must get the same advice,
+    including the '\\|' escape hint.
+    """
+    with pytest.raises(
+        ProcessingError,
+        match=r"has both inline text and a block.*escape a literal pipe as '\\\|'",
+    ):
         decide(
             cell('#| scrub-note: ex-1 | inline text |\n#|   more\nx = 1'),
             OPTS,

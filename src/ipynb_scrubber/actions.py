@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .config import ScrubbingOptions
 from .exceptions import ProcessingError
 from .notebook import Cell, get_cell_source
-from .options import Option, parse_cell_options
+from .options import Option, inline_plus_block_message, parse_cell_options
 
 
 @dataclass(frozen=True)
@@ -49,10 +49,7 @@ def _note_action(option: Option, opts: ScrubbingOptions) -> Note:
 
     if option.block is not None:
         if inline_replacement:
-            raise ProcessingError(
-                f"Option '{opts.note_tag}' has both inline text and a block; "
-                'use one or the other',
-            )
+            raise ProcessingError(inline_plus_block_message(opts.note_tag))
         return Note(note_id, option.block)
 
     if inline_replacement is not None:
@@ -84,11 +81,13 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     scrubber_names = {opts.clear_tag, opts.omit_tag, opts.note_tag}
     present = sorted(scrubber_names & cell_options.keys())
     if len(present) > 1:
-        raise ProcessingError(
-            f'only one scrubber option per cell, but found {", ".join(present)}. '
-            'If one of these was meant as block content, indent it more deeply '
-            'than the option line that opens the block',
-        )
+        message = f'only one scrubber option per cell, but found {", ".join(present)}.'
+        if any(cell_options[name].block is not None for name in present):
+            message += (
+                ' If one of these was meant as block content, indent it more '
+                'deeply than the option line that opens the block'
+            )
+        raise ProcessingError(message)
 
     if opts.omit_tag in tags or opts.omit_tag in cell_options:
         return Omit()
