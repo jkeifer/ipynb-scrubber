@@ -109,7 +109,7 @@ class ScrubNotebook:
         parser.add_argument(
             '--note-tag',
             default=_DEFAULTS.note_tag,
-            help='Tag marking cells to save to notes',
+            help='Option name marking cells to save to notes',
         )
         parser.add_argument(
             '--notes-file',

@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from ipynb_scrubber.config import FileEntry, ProjectConfig, ScrubbingOptions
+from ipynb_scrubber.config import (
+    FileEntry,
+    ProjectConfig,
+    ScrubbingOptions,
+    find_config_file,
+)
 from ipynb_scrubber.exceptions import ScrubberError
 
 
@@ -117,6 +122,37 @@ def test_direct_construction_without_overrides_is_valid():
     entry = FileEntry(input=Path('a.ipynb'), output=Path('b.ipynb'))
     assert entry.overrides == {}
     assert entry.get_options(ScrubbingOptions(clear_tag='G')).clear_tag == 'G'
+
+
+def test_from_file_missing_path_errors():
+    with pytest.raises(ScrubberError, match='Config file not found'):
+        ProjectConfig.from_file(Path('/nonexistent/does-not-exist.toml'))
+
+
+def test_from_file_unreadable_path_errors(tmp_path):
+    """A path that exists but can't be opened as TOML (e.g. a directory)."""
+    a_directory = tmp_path / 'not-a-file.toml'
+    a_directory.mkdir()
+    with pytest.raises(ScrubberError, match='Error reading config file'):
+        ProjectConfig.from_file(a_directory)
+
+
+def test_find_config_file_skips_unreadable_pyproject_toml(tmp_path):
+    """A broken pyproject.toml during upward search is skipped, not fatal."""
+    (tmp_path / 'pyproject.toml').write_text('not valid toml [[[')
+    assert find_config_file(tmp_path) is None
+
+
+def test_find_config_file_finds_valid_pyproject_after_skipping_broken_one(tmp_path):
+    subdir = tmp_path / 'sub'
+    subdir.mkdir()
+    (subdir / 'pyproject.toml').write_text('not valid toml [[[')
+    (tmp_path / 'pyproject.toml').write_text(
+        '[tool.ipynb-scrubber]\n[[tool.ipynb-scrubber.files]]\n'
+        'input = "a.ipynb"\noutput = "b.ipynb"\n',
+    )
+    found = find_config_file(subdir)
+    assert found == tmp_path / 'pyproject.toml'
 
 
 def test_override_error_is_distinct_from_toml_key_error():
