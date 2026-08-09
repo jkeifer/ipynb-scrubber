@@ -107,12 +107,7 @@ def should_clear_cell(
     """
     option = options.get(clear_tag)
     if option is not None:
-        if option.block is not None and option.inline:
-            raise ProcessingError(
-                f"Option '{clear_tag}' has both inline text and a block; "
-                'use one or the other',
-            )
-        return (True, option.value)
+        return (True, option.single_text())
 
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
     if clear_tag in tags:
