@@ -5,17 +5,18 @@ import warnings
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import ClassVar, NoReturn, Protocol
+from typing import Any, ClassVar, NoReturn, Protocol
 
-from .config import FileEntry, ProjectConfig, ScrubbingOptions
+from .config import ProjectConfig, ScrubbingOptions
 from .exceptions import ScrubberError
 from .notes import write_notes_file
 from .processor import process_notebook
+from .project import scrub_file
 
 _DEFAULTS = ScrubbingOptions()
 
 
-def printe(*args, **kwargs) -> None:
+def printe(*args: object, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)  # noqa: T201
 
 
@@ -124,7 +125,7 @@ class ScrubNotebook:
                 notebook = json.load(sys.stdin)
             except json.JSONDecodeError as e:
                 raise ScrubberError(f'Invalid JSON input: {e}') from e
-            except Exception as e:
+            except OSError as e:
                 raise ScrubberError(f'Error reading input: {e}') from e
 
             options = ScrubbingOptions(
@@ -153,7 +154,7 @@ class ScrubNotebook:
 
             try:
                 json.dump(processed_notebook, sys.stdout, indent=1)
-            except Exception as e:
+            except OSError as e:
                 raise ScrubberError(f'Error writing output: {e}') from e
 
         except ScrubberError as e:
@@ -181,41 +182,6 @@ class ScrubProject:
             ),
         )
 
-    def _process_file(
-        self,
-        file_entry: FileEntry,
-        global_options: ScrubbingOptions,
-    ) -> None:
-        options = file_entry.get_options(global_options)
-
-        if not file_entry.input.exists():
-            raise ScrubberError(f'Input file not found: {file_entry.input}')
-
-        try:
-            with file_entry.input.open() as f:
-                notebook = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ScrubberError(f'Invalid JSON in {file_entry.input}: {e}') from e
-        except OSError as e:
-            raise ScrubberError(f'Error reading {file_entry.input}: {e}') from e
-
-        processed_notebook, notes_dict = process_notebook(notebook, options)
-
-        if notes_dict:
-            if file_entry.notes_file is None:
-                raise ScrubberError(
-                    f'Found {len(notes_dict)} cell(s) with note tag '
-                    f'"{options.note_tag}", but no notes-file specified in config',
-                )
-            write_notes_file(notes_dict, file_entry.notes_file)
-
-        try:
-            file_entry.output.parent.mkdir(parents=True, exist_ok=True)
-            with file_entry.output.open('w') as f:
-                json.dump(processed_notebook, f, indent=1)
-        except OSError as e:
-            raise ScrubberError(f'Error writing {file_entry.output}: {e}') from e
-
     def __call__(self, args: argparse.Namespace) -> int:
         try:
             if args.config_file is None:
@@ -228,7 +194,7 @@ class ScrubProject:
 
         for file_entry in config.files:
             try:
-                self._process_file(file_entry, config.global_options)
+                scrub_file(file_entry)
             except ScrubberError as e:
                 printe(f'✗ Error processing {file_entry.input}: {e}')
                 return 1

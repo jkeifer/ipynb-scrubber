@@ -1,8 +1,12 @@
+import argparse
 import json
 
 from pathlib import Path
 
 import pytest
+
+from ipynb_scrubber import project
+from ipynb_scrubber.cli import ScrubProject
 
 
 @pytest.fixture
@@ -448,3 +452,63 @@ def test_unwritable_output_reports_once_without_traceback(tmp_path, scrub_projec
     assert result.returncode == 1
     assert 'Traceback' not in result.stderr
     assert result.stderr.count('Permission denied') == 1
+
+
+def test_failed_notebook_write_leaves_no_orphan_notes_file(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """Notes describe the exercise notebook, so they must not outlive its write."""
+    sample_notebook['cells'].append(
+        {
+            'cell_type': 'code',
+            'source': '#| scrub-note: note-1\nsecret = 1',
+            'metadata': {},
+        },
+    )
+    input_path = tmp_path / 'input.ipynb'
+    write(input_path, sample_notebook)
+    notes_file = tmp_path / 'notes.md'
+
+    locked = tmp_path / 'locked'
+    locked.mkdir()
+    locked.chmod(0o500)
+
+    config = tmp_path / '.ipynb-scrubber.toml'
+    config.write_text(f'''
+[[files]]
+input = "{input_path}"
+output = "{locked / 'sub' / 'out.ipynb'}"
+notes-file = "{notes_file}"
+''')
+
+    result = scrub_project('--config-file', str(config))
+
+    assert result.returncode == 1
+    assert not notes_file.exists()
+
+
+def test_unexpected_error_is_not_swallowed(
+    tmp_path: Path,
+    sample_notebook,
+    monkeypatch,
+):
+    """A non-OSError is an internal bug and must surface, not become exit 1."""
+    input_path = tmp_path / 'input.ipynb'
+    write(input_path, sample_notebook)
+
+    config = tmp_path / '.ipynb-scrubber.toml'
+    config.write_text(f'''
+[[files]]
+input = "{input_path}"
+output = "{tmp_path / 'output.ipynb'}"
+''')
+
+    def boom(*args, **kwargs):
+        raise MemoryError('out of memory')
+
+    monkeypatch.setattr(project.json, 'dump', boom)
+
+    with pytest.raises(MemoryError):
+        ScrubProject()(argparse.Namespace(config_file=config))
