@@ -21,6 +21,8 @@ removing instructor-only content.
 - **Save notes**: Collect code cell contents before clearing and save to a separate
   Markdown file for instructor reference with bidirectional linking
 - **Custom replacement text**: Use cell-specific text instead of default placeholder
+- **Multi-line replacement content**: Write replacement text spanning several
+  lines with a `|` block, or with escape sequences on a single line
 - **All cell types supported**: Works with code, markdown, and raw cells
 - **Remove cells entirely**: Omit instructor-only cells from the output
 - **Multiple syntax options**: Use cell tags or cell-type-appropriate comment syntax
@@ -184,8 +186,8 @@ Add tags to cells using Jupyter's tag interface. This works for all cell types
 - Add `scrub-clear` tag to solution cells that should be cleared
 - Add `scrub-omit` tag to cells that should be removed entirely
 
-**Note:** The `scrub-note` tag requires source-based syntax (see below) and only
-works for code cells.
+**Note:** The `scrub-note` option requires source-based syntax (see below) and
+is valid only in code cells; using it elsewhere is an error.
 
 ### 2. Source-Based Options (Code & Markdown)
 
@@ -243,7 +245,10 @@ This answer will be replaced.
 These notes are only for the instructor.
 ```
 
-**Note:** The `scrub-note` option is only available for code cells.
+**Note:** The `scrub-note` option is valid only in code cells. Using it in a
+markdown cell is an error and fails the run — it is never silently ignored, so
+a note tag on a markdown answer cell can't accidentally ship the answer to
+students.
 
 #### Raw Cells - Tags Only
 
@@ -268,26 +273,162 @@ cleared content:
 
 If no custom text is provided, the default `--clear-text` value is used.
 
+#### Multi-line Replacement Text
+
+Use a `|` block for replacement text spanning several lines. Content is
+indented relative to the option, and that indentation is stripped:
+
+```python
+#| scrub-clear: |
+#|   def add(a, b):
+#|       # TODO: your code here
+#|       pass
+def add(a, b):
+    return a + b
+```
+
+```markdown
+<!-- scrub-clear: |
+  **Write your answer here**
+
+  Show your work.
+-->
+## Solution
+```
+
+**Indent the content more deeply than the option line.** Content at or below
+the option's own indentation ends the block, so this collects nothing and
+clears the cell to nothing at all:
+
+```python
+#| scrub-clear: |
+#| def add(a, b):
+#|     pass
+```
+
+This cannot be flagged as an error, because an empty block is meaningful for
+`scrub-note`, so mind the indentation.
+
+In a code block, an interior blank line must still carry its `#|` marker. A
+genuinely empty line ends the block entirely, so the first of these yields
+only `a` while the second yields `a`, a blank line, and `b`:
+
+```python
+#| scrub-clear: |
+#|   a
+
+#|   b
+```
+
+```python
+#| scrub-clear: |
+#|   a
+#|
+#|   b
+```
+
+The markdown form differs here: it ends at a line containing only `-->`, and
+until then a real blank line is kept verbatim, as in the example above.
+
+A markdown block also requires the comment to stay *open*. The `|` must be the
+last thing on the line, with the `-->` on its own line later. A closed
+one-liner like `<!-- scrub-clear: | -->` is read as ordinary inline text, and
+the replacement becomes the literal string `|`.
+
+Blocks are taken verbatim — no escape processing — which makes them the right
+place for content containing backslashes, such as regexes or LaTeX.
+
+Inline text and a block are mutually exclusive: writing text on the option line
+*and* opening a block is an error, not a concatenation.
+
+```python
+#| scrub-clear: some text |
+#|   more text
+```
+
+Use one or the other. If the trailing `|` was meant as literal text rather than
+a block opener, escape it as `\|`.
+
+#### Escape Sequences
+
+Single-line values expand `\n`, `\t`, `\\`, and `\|`. Any other backslash
+sequence is left untouched, so `#| scrub-clear: re.match(r"\d+")` works as
+written.
+
+Escapes apply only to in-cell options, because that is the only place with no
+other way to write a newline. `--clear-text` and TOML `clear-text` use their
+own native mechanisms instead:
+
+```bash
+ipynb-scrubber scrub-notebook \
+    --clear-text $'def add(a, b):\n    # TODO\n    pass' \
+    < lecture.ipynb > exercise.ipynb
+```
+
+```toml
+clear-text = """
+def add(a, b):
+    # TODO
+    pass"""
+```
+
+A `\n` in a TOML *literal* string (single quotes) stays literal.
+
 ### Notes Files
 
-**Code cells only** - Cells marked with the `scrub-note` tag will have their
-content saved to a separate Markdown file before being cleared from the
+**Code cells only** - A code cell carrying a `#| scrub-note: <id>` option has
+its content saved to a separate Markdown file before being cleared from the
 student version. This creates bidirectional linking between the exercise and
 solutions.
+
+**There is no `scrub-note` cell tag.** Unlike `scrub-clear` and `scrub-omit`,
+the option is source-only: a note needs an id, and a Jupyter metadata tag has
+nowhere to put one. A cell tagged `scrub-note` fails the run rather than being
+ignored, because ignoring it would ship the solution to students. (A cell
+tagged both `scrub-omit` and `scrub-note` is simply omitted.)
 
 **Required format:**
 ```python
 #| scrub-note: note-id
 #| scrub-note: note-id | custom replacement text
+#| scrub-note: note-id |
+#|   multi-line replacement
+#|   from the block below
 ```
 
-The `note-id` is required and should be a human-readable identifier (e.g.,
-`exercise-1`, `question-2a`). When the cell is cleared, a reference comment
-is automatically added:
+The id is split from the replacement text at the first `|`. A block always
+supplies the replacement, never the id. **The id is required** — a `scrub-note`
+without one is an error.
+
+Whitespace around the splitting `|` is irrelevant, so these all parse to the id
+`ex-1` with the replacement `text`:
 
 ```python
-# TODO: Implement this
+#| scrub-note: ex-1 | text
+#| scrub-note: ex-1|text
+#| scrub-note: ex-1 |text
+```
+
+These, by contrast, are all errors rather than silent skips:
+
+```python
+#| scrub-note
+#| scrub-note:
+#| scrub-note: | text
+```
+
+As with `scrub-clear`, inline replacement text and a block are mutually
+exclusive — `#| scrub-note: ex-1 | some text |` followed by block lines is an
+error. Use one or the other, or escape a genuinely intended trailing pipe as
+`\|`.
+
+The `note-id` should be a human-readable identifier (e.g., `exercise-1`,
+`question-2a`). When the cell is cleared, a reference comment is automatically
+added:
+
+```python
 # (See notes: exercise-1)
+# TODO: Implement this
 ```
 
 This creates a clear link from the exercise notebook to the notes file.
