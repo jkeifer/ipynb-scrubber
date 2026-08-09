@@ -26,6 +26,53 @@ def get_cell_source(cell: Cell) -> str:
     return source
 
 
+def _validate_cell(i: int, cell: Any) -> None:
+    """Validate a single cell's shape.
+
+    Raises:
+        InvalidNotebookError: If the cell is invalid.
+    """
+    if not isinstance(cell, dict):
+        raise InvalidNotebookError(f'Cell {i} is not a valid object')
+
+    if 'cell_type' not in cell:
+        raise InvalidNotebookError(
+            f"Cell {i} is missing required 'cell_type' field",
+        )
+
+    cell_type = cell['cell_type']
+    if cell_type not in ('code', 'markdown', 'raw'):
+        raise InvalidNotebookError(
+            f"Cell {i} has invalid cell_type '{cell_type}'. "
+            "Must be 'code', 'markdown', or 'raw'",
+        )
+
+    metadata = cell.get('metadata', {})
+    if not isinstance(metadata, dict):
+        raise InvalidNotebookError(
+            f"Cell {i} has invalid 'metadata' field: must be an object",
+        )
+
+    if 'tags' in metadata:
+        tags = metadata['tags']
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise InvalidNotebookError(
+                f"Cell {i} has invalid 'metadata.tags' field: "
+                'must be an array of strings',
+            )
+
+    if 'source' in cell:
+        source = cell['source']
+        valid_source = isinstance(source, str) or (
+            isinstance(source, list) and all(isinstance(line, str) for line in source)
+        )
+        if not valid_source:
+            raise InvalidNotebookError(
+                f"Cell {i} has invalid 'source' field: "
+                'must be a string or a list of strings',
+            )
+
+
 def validate_notebook(notebook: Any) -> None:
     """Validate that the input is a valid Jupyter notebook.
 
@@ -44,19 +91,5 @@ def validate_notebook(notebook: Any) -> None:
     if not isinstance(notebook.get('cells'), list):
         raise InvalidNotebookError("Notebook 'cells' field must be a list")
 
-    # Validate basic cell structure
     for i, cell in enumerate(notebook['cells']):
-        if not isinstance(cell, dict):
-            raise InvalidNotebookError(f'Cell {i} is not a valid object')
-
-        if 'cell_type' not in cell:
-            raise InvalidNotebookError(
-                f"Cell {i} is missing required 'cell_type' field",
-            )
-
-        cell_type = cell['cell_type']
-        if cell_type not in ('code', 'markdown', 'raw'):
-            raise InvalidNotebookError(
-                f"Cell {i} has invalid cell_type '{cell_type}'. "
-                "Must be 'code', 'markdown', or 'raw'",
-            )
+        _validate_cell(i, cell)

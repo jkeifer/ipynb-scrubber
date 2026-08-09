@@ -46,26 +46,28 @@ def test_error_is_prefixed_with_the_offending_cell_index():
 
 
 def test_internal_bug_surfaces_as_a_bug_not_a_processing_error():
-    """A malformed cell that passes validate_notebook but breaks internal
+    """A malformed notebook that passes validate_notebook but breaks internal
 
-    assumptions (metadata as a string, not a dict) must not be laundered
-    into a ProcessingError: that would hide a real bug behind the
-    user-friendly, traceback-free error contract.
+    assumptions (top-level metadata as a string, not a dict) must not be
+    laundered into a ProcessingError: that would hide a real bug behind the
+    user-friendly, traceback-free error contract. validate_notebook checks
+    cell shape, not the notebook's own top-level metadata field, so this
+    still reaches the bug.
     """
     nb = {
-        'cells': [{'cell_type': 'code', 'source': 'x = 1', 'metadata': 'oops'}],
-        'metadata': {},
+        'cells': [{'cell_type': 'code', 'source': 'x = 1', 'metadata': {}}],
+        'metadata': 'oops',
         'nbformat': 4,
         'nbformat_minor': 4,
     }
-    with pytest.raises(AttributeError):
-        process_notebook(nb, OPTS)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        process_notebook(nb, OPTS)
 
 
 def test_notes_capture_original_source_before_clearing():
     nb = notebook(('code', '#| scrub-note: ex-1\nSOLUTION = 1'))
     result, notes = process_notebook(nb, OPTS)
-    assert notes == {'ex-1': ('code', '#| scrub-note: ex-1\nSOLUTION = 1')}
+    assert notes == {'ex-1': '#| scrub-note: ex-1\nSOLUTION = 1'}
     assert result['cells'][0]['source'] == f'# (See notes: ex-1)\n{OPTS.clear_text}'
 
 
@@ -83,7 +85,7 @@ def test_exercise_version_metadata_is_set():
 def test_missing_metadata_field_is_created():
     """A notebook with no top-level metadata key still gets exercise_version."""
     nb = {'cells': [], 'nbformat': 4, 'nbformat_minor': 4}
-    result, _ = process_notebook(nb, OPTS)  # type: ignore[arg-type]
+    result, _ = process_notebook(nb, OPTS)
     assert result['metadata'] == {'exercise_version': True}
 
 
@@ -96,15 +98,12 @@ def test_list_form_source_is_joined(make_notebook, code):
     """
     nb = make_notebook(code(['#| scrub-note: ex-1\n', 'line one\n', 'line two']))
     _, notes = process_notebook(nb, OPTS)
-    assert notes['ex-1'] == (
-        'code',
-        '#| scrub-note: ex-1\nline one\nline two',
-    )
+    assert notes['ex-1'] == '#| scrub-note: ex-1\nline one\nline two'
 
 
 def test_notes_file_fences_content_as_python(tmp_path):
     path = tmp_path / 'notes.md'
-    write_notes_file({'ex-1': ('code', 'SOLUTION = 1')}, path)
+    write_notes_file({'ex-1': 'SOLUTION = 1'}, path)
     content = path.read_text()
 
     assert '## ex-1' in content
@@ -114,7 +113,7 @@ def test_notes_file_fences_content_as_python(tmp_path):
 
 def test_notes_file_creates_parent_directories(tmp_path):
     path = tmp_path / 'nested' / 'deeper' / 'notes.md'
-    write_notes_file({'ex-1': ('code', 'x = 1')}, path)
+    write_notes_file({'ex-1': 'x = 1'}, path)
     assert path.exists()
 
 
@@ -125,7 +124,7 @@ def test_notes_file_write_error_is_a_processing_error(tmp_path):
     path = blocker / 'notes.md'
 
     with pytest.raises(ProcessingError, match='Error writing notes file'):
-        write_notes_file({'ex-1': ('code', 'x = 1')}, path)
+        write_notes_file({'ex-1': 'x = 1'}, path)
 
 
 # --- notebook-level validation -------------------------------------------
@@ -133,25 +132,25 @@ def test_notes_file_write_error_is_a_processing_error(tmp_path):
 
 def test_non_dict_input_errors():
     with pytest.raises(InvalidNotebookError, match='not a valid JSON object'):
-        process_notebook([], OPTS)  # type: ignore[arg-type]
+        process_notebook([], OPTS)
 
 
 def test_missing_cells_field_errors():
     nb = {'metadata': {}, 'nbformat': 4, 'nbformat_minor': 4}
     with pytest.raises(InvalidNotebookError, match="missing required 'cells' field"):
-        process_notebook(nb, OPTS)  # type: ignore[arg-type]
+        process_notebook(nb, OPTS)
 
 
 def test_non_list_cells_field_errors():
     nb = {'cells': 'not a list', 'metadata': {}, 'nbformat': 4, 'nbformat_minor': 4}
     with pytest.raises(InvalidNotebookError, match="'cells' field must be a list"):
-        process_notebook(nb, OPTS)  # type: ignore[arg-type]
+        process_notebook(nb, OPTS)
 
 
 def test_non_dict_cell_errors():
     nb = {'cells': ['not a dict'], 'metadata': {}, 'nbformat': 4, 'nbformat_minor': 4}
     with pytest.raises(InvalidNotebookError, match='Cell 0 is not a valid object'):
-        process_notebook(nb, OPTS)  # type: ignore[arg-type]
+        process_notebook(nb, OPTS)
 
 
 def test_cell_missing_cell_type_errors():
@@ -165,7 +164,7 @@ def test_cell_missing_cell_type_errors():
         InvalidNotebookError,
         match="Cell 0 is missing required 'cell_type' field",
     ):
-        process_notebook(nb, OPTS)  # type: ignore[arg-type]
+        process_notebook(nb, OPTS)
 
 
 def test_cell_invalid_cell_type_errors():
@@ -176,7 +175,61 @@ def test_cell_invalid_cell_type_errors():
         'nbformat_minor': 4,
     }
     with pytest.raises(InvalidNotebookError, match='invalid cell_type'):
-        process_notebook(nb, OPTS)  # type: ignore[arg-type]
+        process_notebook(nb, OPTS)
+
+
+def test_cell_non_dict_metadata_errors(make_notebook, code):
+    nb = make_notebook({'cell_type': 'code', 'source': 'x = 1', 'metadata': 'oops'})
+    with pytest.raises(
+        InvalidNotebookError,
+        match=r"Cell 0 has invalid 'metadata' field: must be an object",
+    ):
+        process_notebook(nb, OPTS)
+
+
+def test_cell_non_array_tags_errors(make_notebook, code):
+    """tags as a bare string would make `in` do substring matching, silently
+
+    dropping cells whose tag name happens to contain the omit tag as a
+    substring; rejecting a non-array shape up front prevents that.
+    """
+    nb = make_notebook(
+        code('x = 1', metadata={'tags': 'scrub-omit-extra'}),
+    )
+    with pytest.raises(
+        InvalidNotebookError,
+        match=r"Cell 0 has invalid 'metadata\.tags' field: "
+        'must be an array of strings',
+    ):
+        process_notebook(nb, OPTS)
+
+
+def test_cell_tags_with_non_string_items_errors(make_notebook, code):
+    nb = make_notebook(code('x = 1', metadata={'tags': ['ok', 5]}))
+    with pytest.raises(
+        InvalidNotebookError,
+        match=r"Cell 0 has invalid 'metadata\.tags' field",
+    ):
+        process_notebook(nb, OPTS)
+
+
+def test_cell_non_string_non_list_source_errors(make_notebook):
+    nb = make_notebook({'cell_type': 'code', 'source': 5, 'metadata': {}})
+    with pytest.raises(
+        InvalidNotebookError,
+        match=r"Cell 0 has invalid 'source' field: "
+        'must be a string or a list of strings',
+    ):
+        process_notebook(nb, OPTS)
+
+
+def test_cell_source_list_with_non_string_items_errors(make_notebook):
+    nb = make_notebook({'cell_type': 'code', 'source': ['ok', 5], 'metadata': {}})
+    with pytest.raises(
+        InvalidNotebookError,
+        match=r"Cell 0 has invalid 'source' field",
+    ):
+        process_notebook(nb, OPTS)
 
 
 # --- clearing --------------------------------------------------------------
@@ -445,8 +498,7 @@ def test_note_cell_captures_original_and_clears(make_notebook, code):
     result, notes = process_notebook(nb, OPTS)
 
     assert notes['exercise-1'] == (
-        'code',
-        '#| scrub-note: exercise-1\ndef solution():\n    return 42',
+        '#| scrub-note: exercise-1\ndef solution():\n    return 42'
     )
     assert result['cells'][0]['source'] == (
         f'# (See notes: exercise-1)\n{OPTS.clear_text}'
