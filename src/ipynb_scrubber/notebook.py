@@ -1,4 +1,4 @@
-from typing import Any, TypedDict
+from typing import Any, Required, TypedDict, cast
 
 from .exceptions import InvalidNotebookError
 
@@ -11,8 +11,15 @@ class Cell(TypedDict, total=False):
     metadata: dict[str, Any]
 
 
-class Notebook(TypedDict):
-    cells: list[Cell]
+class Notebook(TypedDict, total=False):
+    """A notebook, as far as this tool is concerned.
+
+    Only ``cells`` is required, because only ``cells`` is what
+    :func:`validate_notebook` insists on and what the processor cannot work
+    without. Everything else is carried through untouched when present.
+    """
+
+    cells: Required[list[Cell]]
     metadata: dict[str, Any]
     nbformat: int
     nbformat_minor: int
@@ -73,11 +80,16 @@ def _validate_cell(i: int, cell: Any) -> None:
             )
 
 
-def validate_notebook(notebook: Any) -> None:
+def validate_notebook(notebook: Any) -> Notebook:
     """Validate that the input is a valid Jupyter notebook.
 
     Args:
         notebook: The notebook dictionary to validate
+
+    Returns:
+        The same object, narrowed to :class:`Notebook`. This is the one place
+        the untyped input becomes typed, so downstream code gets checked
+        instead of merely asserted.
 
     Raises:
         InvalidNotebookError: If the notebook is invalid
@@ -93,3 +105,5 @@ def validate_notebook(notebook: Any) -> None:
 
     for i, cell in enumerate(notebook['cells']):
         _validate_cell(i, cell)
+
+    return cast(Notebook, notebook)

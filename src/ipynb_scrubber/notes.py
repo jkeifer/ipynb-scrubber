@@ -2,16 +2,28 @@ from pathlib import Path
 
 from .exceptions import ProcessingError
 
+#: Fence info string used when the notebook's kernel language is unknown.
+#:
+#: Notes are only ever captured from code cells, so the right value is the
+#: notebook's kernel language (``metadata.kernelspec.language``). That is not
+#: plumbed this far: ``process_notebook`` returns only ``dict[str, str]``, so
+#: changing it is an API decision, not a local fix. Until then this is the
+#: honest default rather than a silent assumption buried in an f-string.
+DEFAULT_NOTE_LANGUAGE = 'python'
+
 
 def write_notes_file(
     notes_dict: dict[str, str],
     output_path: Path,
+    language: str = DEFAULT_NOTE_LANGUAGE,
 ) -> None:
     """Write collected cell notes to a Markdown file.
 
     Args:
         notes_dict: Map of note_id -> content.
         output_path: Path where notes file will be written
+        language: Fence info string for the note bodies, i.e. the notebook's
+            kernel language. Defaults to :data:`DEFAULT_NOTE_LANGUAGE`.
 
     Raises:
         ProcessingError: If an error occurs while writing notes
@@ -28,7 +40,7 @@ def write_notes_file(
 
             for note_id, content in notes_dict.items():
                 f.write(f'## {note_id}\n\n')
-                f.write('```python\n')
+                f.write(f'```{language}\n')
                 f.write(content)
                 if not content.endswith('\n'):
                     f.write('\n')
