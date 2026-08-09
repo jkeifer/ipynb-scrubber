@@ -158,10 +158,7 @@ class ScrubNotebook:
 
         except ScrubberError as e:
             printe(f'Error: {e}')
-            sys.exit(1)
-        except Exception as e:
-            printe(f'Unexpected error: {e}')
-            raise
+            return 1
         return 0
 
 

@@ -1,6 +1,6 @@
 from .actions import Note, Omit, apply, decide
 from .config import ScrubbingOptions
-from .exceptions import ProcessingError
+from .exceptions import ProcessingError, ScrubberError
 from .notebook import Cell, Notebook, get_cell_source, validate_notebook
 
 __all__ = [
@@ -57,7 +57,7 @@ def process_notebook(
                 )
 
             processed.append(apply(cell, action))
-        except Exception as e:
+        except ScrubberError as e:
             raise ProcessingError(f'Cell {index}: {e}') from e
 
     notebook['cells'] = processed

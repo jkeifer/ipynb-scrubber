@@ -45,6 +45,23 @@ def test_error_is_prefixed_with_the_offending_cell_index():
         process_notebook(nb, OPTS)
 
 
+def test_internal_bug_surfaces_as_a_bug_not_a_processing_error():
+    """A malformed cell that passes validate_notebook but breaks internal
+
+    assumptions (metadata as a string, not a dict) must not be laundered
+    into a ProcessingError: that would hide a real bug behind the
+    user-friendly, traceback-free error contract.
+    """
+    nb = {
+        'cells': [{'cell_type': 'code', 'source': 'x = 1', 'metadata': 'oops'}],
+        'metadata': {},
+        'nbformat': 4,
+        'nbformat_minor': 4,
+    }
+    with pytest.raises(AttributeError):
+        process_notebook(nb, OPTS)  # type: ignore[arg-type]
+
+
 def test_notes_capture_original_source_before_clearing():
     nb = notebook(('code', '#| scrub-note: ex-1\nSOLUTION = 1'))
     result, notes = process_notebook(nb, OPTS)
