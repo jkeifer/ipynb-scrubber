@@ -124,3 +124,27 @@ def test_apply_note_writes_reference_comment():
 def test_apply_note_with_empty_text_omits_the_newline():
     result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', ''))
     assert result['source'] == '# (See notes: ex-1)'
+
+
+def test_note_inline_text_and_block_conflict_errors():
+    with pytest.raises(ProcessingError, match='has both inline text and a block'):
+        decide(
+            cell('#| scrub-note: ex-1 | inline text |\n#|   more\nx = 1'),
+            OPTS,
+        )
+
+
+def test_note_uses_inline_replacement_text():
+    assert decide(cell('#| scrub-note: ex-1 | inline text\nx = 1'), OPTS) == Note(
+        'ex-1',
+        'inline text',
+    )
+
+
+def test_clear_via_tag_only():
+    assert decide(cell('x = 1', tags=['scrub-clear']), OPTS) == Clear(OPTS.clear_text)
+
+
+def test_apply_clear_replaces_source():
+    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Clear('replaced'))
+    assert result['source'] == 'replaced'
