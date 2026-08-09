@@ -22,17 +22,25 @@ removing instructor-only content.
   Markdown file for instructor reference with bidirectional linking
 - **Custom replacement text**: Use cell-specific text instead of default placeholder
 - **Multi-line replacement content**: Write replacement text spanning several
-  lines with a `|` block, or with escape sequences on a single line
+  lines with a YAML block scalar
 - **All cell types supported**: Works with code, markdown, and raw cells
 - **Remove cells entirely**: Omit instructor-only cells from the output
 - **Multiple syntax options**: Use cell tags or cell-type-appropriate comment syntax
-- **Preserve structure**: Maintain notebook structure and metadata
+- **Standard header syntax**: Code cell options are Quarto `#|` headers, parsed
+  as the YAML they are
+- **Preserve structure**: Maintain notebook structure and metadata, and carry
+  through any fields this tool does not interpret
 - **Clear all outputs**: Remove all cell outputs and execution counts for a
   clean slate
 - **Project-wide processing**: Process multiple notebooks with a single command
   using a TOML config file
+- **Never a partial result**: Outputs are moved into place only once written in
+  full, and a failing notebook cancels the whole run rather than leaving a
+  half-finished tree
 - **Flexible CLI**: Unix-style stdin/stdout for single files, or config-based
   batch processing for projects
+- **Python API**: Drive the same scrubbing from code (see
+  [Python API](#python-api))
 
 ## Installation
 
@@ -62,8 +70,16 @@ ipynb-scrubber scrub-notebook < input.ipynb > output.ipynb
 - `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
 - `--note-tag TAG`: Option name marking cells to save to notes
   (default: `scrub-note`)
-- `--notes-file PATH`: Path to write the notes file for cells with the note
-  tag (see [Notes Files](#notes-files))
+- `--notes-file PATH`: Path to write the notes file, required if any cell
+  carries the note tag (see [Notes Files](#notes-files))
+
+The three names must differ from one another. Pointing two of them at the same
+string would make a marked cell ambiguous, so it is rejected:
+
+```text
+clear-tag, omit-tag and note-tag must all be distinct, but got
+clear-tag='x', omit-tag='x', note-tag='scrub-note'
+```
 
 #### Examples
 
@@ -164,6 +180,11 @@ Unknown keys anywhere in the config — the top level, `[options]`, or a
 lists the valid ones, so a misspelled `clear-tagg` fails the run instead of
 silently leaving solution cells unscrubbed.
 
+`clear-tag`, `omit-tag` and `note-tag` must differ from one another, both in
+`[options]` and after a `[[files]]` entry's overrides are applied. An entry
+that overrides one tag onto the value of another inherited from `[options]`
+is rejected on that basis.
+
 **Option 2: Using `pyproject.toml`**
 
 Add configuration to your existing `pyproject.toml` under
@@ -197,6 +218,79 @@ Specify a different config file location (bypasses automatic discovery):
 ```bash
 ipynb-scrubber scrub-project --config-file path/to/config.toml
 ```
+
+## Python API
+
+Everything the commands do is available as a library. The public surface is
+exported from the package root:
+
+```python
+from ipynb_scrubber import (
+    FileEntry,
+    Notebook,
+    ProjectConfig,
+    ScrubberError,
+    ScrubbingOptions,
+    process_notebook,
+    scrub_file,
+    scrub_files,
+)
+```
+
+### Scrubbing a notebook in memory
+
+`process_notebook` takes a parsed notebook and returns a new one alongside the
+notes it collected. It leaves its argument alone and either returns a complete
+exercise notebook or raises, so a failure part way through a notebook cannot
+hand back something half-scrubbed:
+
+```python
+import json
+
+from ipynb_scrubber import ScrubbingOptions, process_notebook
+
+with open('lecture.ipynb') as f:
+    notebook = json.load(f)
+
+exercise, notes = process_notebook(notebook, ScrubbingOptions())
+```
+
+`notes` maps each note id to the original source of the cell it came from.
+`ScrubbingOptions` carries the same four settings as the CLI flags, so
+`ScrubbingOptions(clear_text='# YOUR CODE HERE')` mirrors
+`--clear-text '# YOUR CODE HERE'`.
+
+### Running a config
+
+`ProjectConfig` loads the same TOML the `scrub-project` command reads, and
+`scrub_files` runs a whole batch, reading each input and writing each exercise
+notebook and notes file:
+
+```python
+from ipynb_scrubber import ProjectConfig, scrub_files
+
+config = ProjectConfig.discover()      # or ProjectConfig.from_file(path)
+
+scrub_files(config.files)
+```
+
+`scrub_files` is all-or-nothing across the batch: every output is staged first
+and committed only once all of them have succeeded. Looping over `config.files`
+and calling `scrub_file` on each is not equivalent — `scrub_file` is atomic for
+its own entry, but a failure on the fourth notebook would leave the first three
+committed.
+
+Each `FileEntry` carries its own fully resolved `ScrubbingOptions`, with any
+per-entry overrides already merged over the global ones, so `entry.options`
+is what that notebook will actually be scrubbed with.
+
+### Errors
+
+Every failure caused by input or configuration raises `ScrubberError`, or one
+of its two subclasses: `InvalidNotebookError` when a notebook is not shaped
+like a notebook, and `ProcessingError` when a cell's option header cannot be
+honored. Catching `ScrubberError` catches all of them. Anything else escaping
+these functions is a defect in this tool rather than a problem with the input.
 
 ## Marking Cells
 
@@ -521,12 +615,17 @@ Cell 2: Duplicate note id 'ex-1'; already used by cell 0. Note ids must be
 unique within a notebook
 ```
 
-**Behavior by command:**
+**A note cell requires somewhere to put the note.** If a notebook contains note
+cells, `scrub-notebook` requires `--notes-file` and `scrub-project` requires
+`notes-file` on that entry; without one the run fails and nothing is written.
 
-- **`scrub-notebook`**: If note cells are found but no `--notes-file` is
-  specified, a warning is issued but processing continues
-- **`scrub-project`**: If note cells are found but no `notes-file` is specified
-  in the config, processing fails with an error
+Scrubbing a note cell replaces its body with a `# (See notes: <id>)` pointer, so
+producing the exercise notebook without the notes file it points at would leave
+that reference dangling.
+
+**Note bodies are fenced in the notebook's own language,** read from
+`metadata.language_info.name` or `metadata.kernelspec.language`. A notebook that
+declares neither is fenced as `python`.
 
 **Notes file format:**
 
@@ -642,7 +741,19 @@ print("Exercise: implement the functions below")
   - Cells with the omit tag are removed entirely from the output
 - **Notebook metadata**: An `exercise_version` flag is added to the notebook
   metadata
-- **Error handling**: Invalid notebooks produce helpful error messages
+- **Unrecognized fields are carried through**: Notebook and cell keys this tool
+  does not interpret are passed to the output untouched
+- **A notebook is scrubbed whole or not at all**: An error anywhere in a
+  notebook means no output for it, rather than a partially scrubbed result
+- **Outputs are written atomically**: Each file is written beside its target and
+  moved into place once complete, so no output is ever seen half-written. A
+  `scrub-project` run stages every file first and commits only once all of them
+  have succeeded, so a failing entry cancels the whole batch. Committing several
+  files is several moves rather than one transaction, so an interruption during
+  the commit itself can leave some entries written
+- **Error handling**: A problem with a notebook, a config or a cell's options is
+  reported as a short message with a non-zero exit status. Anything else is a
+  defect in this tool and surfaces as a traceback
 
 ## License
 
