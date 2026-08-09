@@ -1,3 +1,5 @@
+import tomllib
+
 from pathlib import Path
 
 import pytest
@@ -6,7 +8,7 @@ from ipynb_scrubber.config import (
     FileEntry,
     ProjectConfig,
     ScrubbingOptions,
-    find_config_file,
+    find_config,
 )
 from ipynb_scrubber.exceptions import ScrubberError
 
@@ -14,8 +16,9 @@ from ipynb_scrubber.exceptions import ScrubberError
 def test_file_level_empty_clear_text_is_preserved():
     entry = FileEntry.from_dict(
         {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-text': ''},
+        ScrubbingOptions(),
     )
-    assert entry.get_options(ScrubbingOptions()).clear_text == ''
+    assert entry.options.clear_text == ''
 
 
 def test_global_empty_clear_text_is_preserved():
@@ -23,17 +26,40 @@ def test_global_empty_clear_text_is_preserved():
 
 
 def test_absent_file_option_falls_back_to_global():
-    entry = FileEntry.from_dict({'input': 'a.ipynb', 'output': 'b.ipynb'})
-    merged = entry.get_options(ScrubbingOptions(clear_text='GLOBAL'))
-    assert merged.clear_text == 'GLOBAL'
+    entry = FileEntry.from_dict(
+        {'input': 'a.ipynb', 'output': 'b.ipynb'},
+        ScrubbingOptions(clear_text='GLOBAL'),
+    )
+    assert entry.options.clear_text == 'GLOBAL'
 
 
 def test_file_option_overrides_global():
     entry = FileEntry.from_dict(
         {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'mine'},
+        ScrubbingOptions(clear_tag='theirs'),
     )
-    merged = entry.get_options(ScrubbingOptions(clear_tag='theirs'))
-    assert merged.clear_tag == 'mine'
+    assert entry.options.clear_tag == 'mine'
+
+
+def test_merged_with_is_presence_based_not_truthiness_based():
+    merged = ScrubbingOptions(clear_text='GLOBAL', clear_tag='theirs').merged_with(
+        {'clear-text': ''},
+    )
+    assert merged.clear_text == ''
+    assert merged.clear_tag == 'theirs'
+
+
+def test_config_resolves_options_per_file():
+    config = ProjectConfig.from_dict(
+        {
+            'options': {'clear-text': 'GLOBAL'},
+            'files': [
+                {'input': 'a.ipynb', 'output': 'a-out.ipynb'},
+                {'input': 'b.ipynb', 'output': 'b-out.ipynb', 'clear-text': 'MINE'},
+            ],
+        },
+    )
+    assert [f.options.clear_text for f in config.files] == ['GLOBAL', 'MINE']
 
 
 def test_cli_defaults_match_dataclass_defaults():
@@ -61,6 +87,16 @@ def test_unknown_file_entry_key_errors():
     with pytest.raises(ScrubberError, match='notes-fil'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', 'notes-fil': 'n.md'},
+            ScrubbingOptions(),
+        )
+
+
+def test_field_name_spelling_is_not_a_valid_toml_key():
+    """KEYS maps TOML spellings only; the dataclass field name is a typo."""
+    with pytest.raises(ScrubberError, match='file entry key'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear_text': 'x'},
+            ScrubbingOptions(),
         )
 
 
@@ -76,7 +112,7 @@ def test_file_entry_requires_input_and_output(missing):
     data = {'input': 'a.ipynb', 'output': 'b.ipynb'}
     del data[missing]
     with pytest.raises(ScrubberError, match=missing):
-        FileEntry.from_dict(data)
+        FileEntry.from_dict(data, ScrubbingOptions())
 
 
 def test_config_requires_at_least_one_file():
@@ -84,44 +120,37 @@ def test_config_requires_at_least_one_file():
         ProjectConfig.from_dict({})
 
 
-def test_direct_construction_rejects_bogus_override_key():
-    """A bad override is a ScrubberError, not a TypeError from replace()."""
-    with pytest.raises(ScrubberError, match='file entry override'):
-        FileEntry(
-            input=Path('a.ipynb'),
-            output=Path('b.ipynb'),
-            overrides={'not_a_field': 'x'},
-        )
-
-
-def test_direct_construction_rejects_toml_spelling_as_override_key():
-    """overrides is keyed by field name, so the TOML spelling is invalid."""
-    with pytest.raises(ScrubberError, match='clear-text'):
-        FileEntry(
-            input=Path('a.ipynb'),
-            output=Path('b.ipynb'),
-            overrides={'clear-text': 'x'},
-        )
-
-
-def test_direct_construction_with_valid_overrides_merges():
-    entry = FileEntry(
-        input=Path('a.ipynb'),
-        output=Path('b.ipynb'),
-        overrides={'clear_text': '', 'clear_tag': 'mine'},
-    )
-    merged = entry.get_options(
-        ScrubbingOptions(clear_text='GLOBAL', clear_tag='theirs', omit_tag='keep'),
-    )
-    assert merged.clear_text == ''
-    assert merged.clear_tag == 'mine'
-    assert merged.omit_tag == 'keep'
-
-
-def test_direct_construction_without_overrides_is_valid():
+def test_direct_construction_defaults_to_default_options():
     entry = FileEntry(input=Path('a.ipynb'), output=Path('b.ipynb'))
-    assert entry.overrides == {}
-    assert entry.get_options(ScrubbingOptions(clear_tag='G')).clear_tag == 'G'
+    assert entry.options == ScrubbingOptions()
+
+
+@pytest.mark.parametrize(
+    'kwargs',
+    [
+        {'clear_tag': 'x', 'omit_tag': 'x'},
+        {'clear_tag': 'x', 'note_tag': 'x'},
+        {'omit_tag': 'x', 'note_tag': 'x'},
+    ],
+)
+def test_colliding_tags_are_rejected(kwargs):
+    """Tags are matched as a set, so a collision would silently drop one."""
+    with pytest.raises(ScrubberError, match='must all be distinct'):
+        ScrubbingOptions(**kwargs)
+
+
+def test_colliding_tags_are_rejected_from_dict():
+    with pytest.raises(ScrubberError, match='must all be distinct'):
+        ScrubbingOptions.from_dict({'clear-tag': 'dup', 'omit-tag': 'dup'})
+
+
+def test_file_override_colliding_with_inherited_tag_is_rejected():
+    """The merge goes through replace(), so __post_init__ catches it."""
+    with pytest.raises(ScrubberError, match='must all be distinct'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'scrub-omit'},
+            ScrubbingOptions(),
+        )
 
 
 def test_from_file_missing_path_errors():
@@ -133,11 +162,25 @@ def test_from_file_unreadable_path_errors(tmp_path):
     """A path that exists but can't be opened as TOML (e.g. a directory)."""
     a_directory = tmp_path / 'not-a-file.toml'
     a_directory.mkdir()
-    with pytest.raises(ScrubberError, match='Error reading config file'):
+    with pytest.raises(ScrubberError, match=r'Error reading .*not-a-file\.toml'):
         ProjectConfig.from_file(a_directory)
 
 
-def test_find_config_file_errors_on_unparsable_pyproject_toml(tmp_path):
+def test_from_file_does_not_swallow_unexpected_errors(tmp_path, monkeypatch):
+    """Only OSError and TOMLDecodeError become friendly errors."""
+    config = tmp_path / '.ipynb-scrubber.toml'
+    config.write_text('[[files]]\ninput = "a.ipynb"\noutput = "b.ipynb"\n')
+
+    def boom(*args, **kwargs):
+        raise MemoryError('out of memory')
+
+    monkeypatch.setattr(tomllib, 'load', boom)
+
+    with pytest.raises(MemoryError):
+        ProjectConfig.from_file(config)
+
+
+def test_find_config_errors_on_unparsable_pyproject_toml(tmp_path):
     """A broken pyproject.toml during upward search is fatal, not skipped.
 
     We can't know whether the broken file would have contained a
@@ -145,18 +188,18 @@ def test_find_config_file_errors_on_unparsable_pyproject_toml(tmp_path):
     config found higher up" is a sound conclusion.
     """
     (tmp_path / 'pyproject.toml').write_text('not valid toml [[[')
-    with pytest.raises(ScrubberError, match=r'pyproject\.toml.*could not be read'):
-        find_config_file(tmp_path)
+    with pytest.raises(ScrubberError, match=r'pyproject\.toml.*Fix or remove'):
+        find_config(tmp_path)
 
 
-def test_find_config_file_errors_on_unreadable_pyproject_toml(tmp_path):
+def test_find_config_errors_on_unreadable_pyproject_toml(tmp_path):
     """A pyproject.toml that exists but can't be opened (e.g. a directory)."""
     (tmp_path / 'pyproject.toml').mkdir()
-    with pytest.raises(ScrubberError, match=r'pyproject\.toml.*could not be read'):
-        find_config_file(tmp_path)
+    with pytest.raises(ScrubberError, match=r'pyproject\.toml.*Fix or remove'):
+        find_config(tmp_path)
 
 
-def test_find_config_file_skips_pyproject_toml_without_our_section(tmp_path):
+def test_find_config_skips_pyproject_toml_without_our_section(tmp_path):
     """A readable pyproject.toml with no [tool.ipynb-scrubber] is legitimate
 
     and the search must keep going upward to find a real config.
@@ -168,22 +211,22 @@ def test_find_config_file_skips_pyproject_toml_without_our_section(tmp_path):
         '[tool.ipynb-scrubber]\n[[tool.ipynb-scrubber.files]]\n'
         'input = "a.ipynb"\noutput = "b.ipynb"\n',
     )
-    found = find_config_file(subdir)
-    assert found == tmp_path / 'pyproject.toml'
+    found = find_config(subdir)
+    assert found is not None
+    assert found[0] == tmp_path / 'pyproject.toml'
 
 
-def test_override_error_is_distinct_from_toml_key_error():
-    """Each layer names itself so a reader knows which one rejected."""
-    with pytest.raises(ScrubberError) as from_dict_err:
-        FileEntry.from_dict(
-            {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear_text': 'x'},
-        )
-    with pytest.raises(ScrubberError) as post_init_err:
-        FileEntry(
-            input=Path('a.ipynb'),
-            output=Path('b.ipynb'),
-            overrides={'clear-text': 'x'},
-        )
+def test_find_config_returns_the_parsed_config(tmp_path):
+    """The search parses the file it finds so callers need not re-read it."""
+    (tmp_path / '.ipynb-scrubber.toml').write_text(
+        '[[files]]\ninput = "a.ipynb"\noutput = "b.ipynb"\n',
+    )
+    found = find_config(tmp_path)
+    assert found is not None
+    path, data = found
+    assert path == tmp_path / '.ipynb-scrubber.toml'
+    assert data == {'files': [{'input': 'a.ipynb', 'output': 'b.ipynb'}]}
 
-    assert 'file entry key' in str(from_dict_err.value)
-    assert 'file entry override' in str(post_init_err.value)
+
+def test_find_config_returns_none_when_nothing_is_found(tmp_path):
+    assert find_config(tmp_path / 'nowhere') is None

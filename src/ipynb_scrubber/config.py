@@ -33,55 +33,80 @@ def reject_unknown_keys(
         )
 
 
-def find_config_file(start_dir: Path | None = None) -> Path | None:
-    """Search upward from start_dir for a config file.
+def _load_scrubber_section(path: Path) -> dict[str, Any] | None:
+    """Read ``path`` and return the scrubber configuration it defines.
 
-    Searches for .ipynb-scrubber.toml or pyproject.toml with [tool.ipynb-scrubber].
-    Searches from start_dir upward to filesystem root.
+    A ``pyproject.toml`` carries its configuration under
+    ``[tool.ipynb-scrubber]``; any other file is a standalone config and is
+    its configuration in its entirety.
+
+    Returns:
+        The configuration mapping, or None for a ``pyproject.toml`` with no
+        ``[tool.ipynb-scrubber]`` section.
+
+    Raises:
+        ScrubberError: If the file cannot be read or parsed as TOML.
+    """
+    try:
+        with path.open('rb') as f:
+            data = tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        raise ScrubberError(f'Invalid TOML in {path}: {e}') from e
+    except OSError as e:
+        raise ScrubberError(f'Error reading {path}: {e}') from e
+
+    if path.name != 'pyproject.toml':
+        return data
+
+    section = data.get('tool', {}).get('ipynb-scrubber')
+    return section if isinstance(section, dict) else None
+
+
+def find_config(start_dir: Path | None = None) -> tuple[Path, dict[str, Any]] | None:
+    """Search upward from start_dir for a config file and load it.
+
+    Searches for .ipynb-scrubber.toml or pyproject.toml with
+    [tool.ipynb-scrubber], from start_dir up to the filesystem root. The
+    file is parsed as part of the search, so callers need not re-read it.
 
     Args:
         start_dir: Directory to start searching from (default: cwd)
 
     Returns:
-        Path to config file, or None if not found
+        The config file's path and its configuration mapping, or None if no
+        config file was found.
+
+    Raises:
+        ScrubberError: If a candidate config file cannot be read or parsed.
     """
-    if start_dir is None:
-        start_dir = Path.cwd()
+    current = (Path.cwd() if start_dir is None else start_dir).resolve()
 
-    current = start_dir.resolve()
-
-    # Search upward until we hit the filesystem root
     while True:
-        # Check for standalone config file first
         standalone_config = current / '.ipynb-scrubber.toml'
         if standalone_config.exists():
-            return standalone_config
+            # Not a pyproject.toml, so the file is the config in full and
+            # _load_scrubber_section never reports a missing section.
+            return standalone_config, _load_scrubber_section(standalone_config) or {}
 
-        # Check for pyproject.toml with [tool.ipynb-scrubber] section
         pyproject = current / 'pyproject.toml'
         if pyproject.exists():
             try:
-                with pyproject.open('rb') as f:
-                    data = tomllib.load(f)
-            except (OSError, tomllib.TOMLDecodeError) as e:
+                section = _load_scrubber_section(pyproject)
+            except ScrubberError as e:
                 # A pyproject.toml we can't read or parse makes the search
                 # unsound: we cannot tell whether it would have carried a
                 # [tool.ipynb-scrubber] section, so neither "use this other
                 # config" nor "no config found" can be trusted. Fail loudly
                 # instead of silently searching past it.
                 raise ScrubberError(
-                    f'{pyproject} exists but could not be read as TOML: {e}. '
-                    'Fix or remove this file so config discovery can '
+                    f'{e}. Fix or remove this file so config discovery can '
                     'determine whether it defines [tool.ipynb-scrubber].',
                 ) from e
-            # Check if it has our config section
-            if 'tool' in data and 'ipynb-scrubber' in data['tool']:
-                return pyproject
+            if section is not None:
+                return pyproject, section
 
-        # Move up one directory
         parent = current.parent
         if parent == current:
-            # We've reached the filesystem root
             return None
         current = parent
 
@@ -104,61 +129,75 @@ class ScrubbingOptions:
         'note-tag': 'note_tag',
     }
 
+    def __post_init__(self) -> None:
+        """Reject tag names that collide.
+
+        The three tags are matched as a set, so two spellings that are equal
+        collapse into one and whichever behaviour loses the precedence order
+        silently disappears. This also runs for ``replace()``, so a per-file
+        override that collides with an inherited tag is caught too.
+
+        Raises:
+            ScrubberError: If the three tags are not all distinct.
+        """
+        tags = (self.clear_tag, self.omit_tag, self.note_tag)
+        if len(set(tags)) != len(tags):
+            raise ScrubberError(
+                'clear-tag, omit-tag and note-tag must all be distinct, but '
+                f'got clear-tag={self.clear_tag!r}, omit-tag={self.omit_tag!r}, '
+                f'note-tag={self.note_tag!r}',
+            )
+
+    def merged_with(self, data: dict[str, Any]) -> Self:
+        """Return a copy with every option ``data`` mentions overridden.
+
+        Presence-based, not truthiness-based: a key that is present is used
+        verbatim, including an empty string. Keys absent from ``data`` keep
+        this instance's value.
+
+        Raises:
+            ScrubberError: If the merged tags are not all distinct.
+        """
+        return replace(
+            self,
+            **{field: data[key] for key, field in self.KEYS.items() if key in data},
+        )
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         """Create ScrubbingOptions from a config mapping.
 
-        Keys absent from ``data`` keep their dataclass default; a key that
-        is present is used verbatim, including an empty string.
-
         Raises:
-            ScrubberError: If ``data`` contains an unrecognised key.
+            ScrubberError: If ``data`` contains an unrecognised key or the
+                resulting tags are not all distinct.
         """
         reject_unknown_keys(data, cls.KEYS, 'option')
-        return cls(
-            **{field: data[key] for key, field in cls.KEYS.items() if key in data},
-        )
+        return cls().merged_with(data)
 
 
 @dataclass
 class FileEntry:
-    """Configuration for a single notebook file."""
+    """One notebook to scrub, with the options resolved for it."""
 
     input: Path
     output: Path
+    options: ScrubbingOptions = field(default_factory=ScrubbingOptions)
     notes_file: Path | None = None
-    overrides: dict[str, Any] = field(default_factory=dict)
 
     #: TOML keys a file entry accepts beyond the ScrubbingOptions keys.
     OWN_KEYS: ClassVar[frozenset[str]] = frozenset(
         {'input', 'output', 'notes-file'},
     )
 
-    def __post_init__(self) -> None:
-        """Enforce that ``overrides`` is keyed by ScrubbingOptions field names.
-
-        ``from_dict`` is the normal construction path and always satisfies
-        this, but the invariant is what makes ``get_options`` safe. Checking
-        it here means a direct construction with a bad key fails immediately
-        with a clear error, rather than a ``TypeError`` raised from inside
-        ``dataclasses.replace`` at merge time.
-
-        Raises:
-            ScrubberError: If an override is not a ScrubbingOptions field.
-        """
-        reject_unknown_keys(
-            self.overrides,
-            set(ScrubbingOptions.KEYS.values()),
-            'file entry override',
-        )
-
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Self:
-        """Create FileEntry from dictionary.
+    def from_dict(cls, data: dict[str, Any], defaults: ScrubbingOptions) -> Self:
+        """Create FileEntry from a config mapping.
+
+        Options the entry does not mention are inherited from ``defaults``.
 
         Raises:
-            ScrubberError: If input or output is missing, or a key is
-                unrecognised.
+            ScrubberError: If input or output is missing, a key is
+                unrecognised, or the resolved tags are not all distinct.
         """
         reject_unknown_keys(
             data,
@@ -174,28 +213,15 @@ class FileEntry:
         return cls(
             input=Path(data['input']),
             output=Path(data['output']),
+            options=defaults.merged_with(data),
             notes_file=Path(notes_file) if notes_file else None,
-            overrides={
-                field_name: data[key]
-                for key, field_name in ScrubbingOptions.KEYS.items()
-                if key in data
-            },
         )
-
-    def get_options(self, global_options: ScrubbingOptions) -> ScrubbingOptions:
-        """Merge this file's overrides over the global options.
-
-        Presence-based, not truthiness-based: a file that explicitly sets
-        ``clear-text = ""`` gets an empty string, not the global default.
-        """
-        return replace(global_options, **self.overrides)
 
 
 @dataclass
 class ProjectConfig:
     """Configuration for scrubbing a project."""
 
-    global_options: ScrubbingOptions = field(default_factory=ScrubbingOptions)
     files: list[FileEntry] = field(default_factory=list)
 
     TOP_LEVEL_KEYS: ClassVar[frozenset[str]] = frozenset({'options', 'files'})
@@ -209,16 +235,13 @@ class ProjectConfig:
         """
         reject_unknown_keys(data, cls.TOP_LEVEL_KEYS, 'config key')
 
-        global_options = ScrubbingOptions.from_dict(data.get('options', {}))
+        defaults = ScrubbingOptions.from_dict(data.get('options', {}))
 
         files_data = data.get('files', [])
         if not files_data:
             raise ScrubberError('Config file must contain at least one file entry')
 
-        return cls(
-            global_options=global_options,
-            files=[FileEntry.from_dict(f) for f in files_data],
-        )
+        return cls(files=[FileEntry.from_dict(f, defaults) for f in files_data])
 
     @classmethod
     def from_file(cls, config_path: Path) -> Self:
@@ -239,21 +262,11 @@ class ProjectConfig:
         if not config_path.exists():
             raise ScrubberError(f'Config file not found: {config_path}')
 
-        try:
-            with config_path.open('rb') as f:
-                data = tomllib.load(f)
-        except tomllib.TOMLDecodeError as e:
-            raise ScrubberError(f'Invalid TOML in config file: {e}') from e
-        except Exception as e:
-            raise ScrubberError(f'Error reading config file: {e}') from e
-
-        # If this is a pyproject.toml, extract the tool.ipynb-scrubber section
-        if config_path.name == 'pyproject.toml':
-            if 'tool' not in data or 'ipynb-scrubber' not in data['tool']:
-                raise ScrubberError(
-                    f'{config_path} does not contain [tool.ipynb-scrubber] section',
-                )
-            data = data['tool']['ipynb-scrubber']
+        data = _load_scrubber_section(config_path)
+        if data is None:
+            raise ScrubberError(
+                f'{config_path} does not contain [tool.ipynb-scrubber] section',
+            )
 
         return cls.from_dict(data)
 
@@ -274,10 +287,11 @@ class ProjectConfig:
         Raises:
             ScrubberError: If no config file found
         """
-        config_path = find_config_file(start_dir)
-        if config_path is None:
+        found = find_config(start_dir)
+        if found is None:
             raise ScrubberError(
                 'No config file found. Expected .ipynb-scrubber.toml or '
                 'pyproject.toml with [tool.ipynb-scrubber] section',
             )
-        return cls.from_file(config_path)
+        _, data = found
+        return cls.from_dict(data)
