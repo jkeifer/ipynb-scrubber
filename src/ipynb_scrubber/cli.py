@@ -1,7 +1,6 @@
 import argparse
 import json
 import sys
-import warnings
 
 from collections.abc import Sequence
 from pathlib import Path
@@ -12,7 +11,7 @@ from .exceptions import ScrubberError
 from .notebook import get_notebook_language
 from .notes import write_notes_file
 from .processor import process_notebook
-from .project import scrub_file
+from .project import scrub_files
 
 _DEFAULTS = ScrubbingOptions()
 
@@ -117,7 +116,9 @@ class ScrubNotebook:
             '--notes-file',
             type=Path,
             default=None,
-            help='Path to write notes file (for cells with note tag)',
+            help=(
+                'Path to write notes file (required if any cell carries the note tag)'
+            ),
         )
 
     def __call__(self, args: argparse.Namespace) -> int:
@@ -142,19 +143,19 @@ class ScrubNotebook:
 
             if notes_dict:
                 if args.notes_file is None:
-                    warnings.warn(
-                        f'Found {len(notes_dict)} cell(s) marked with note tag '
-                        f'"{args.note_tag}", but no --notes-file specified. '
-                        'Notes will not be saved.',
-                        UserWarning,
-                        stacklevel=2,
+                    # The exercise notebook points its reader at the notes by
+                    # id, so writing it without somewhere to put the notes
+                    # would produce a dangling reference.
+                    raise ScrubberError(
+                        f'Found {len(notes_dict)} cell(s) with note tag '
+                        f'"{args.note_tag}", but nowhere to save the notes. '
+                        'Pass --notes-file PATH.',
                     )
-                else:
-                    write_notes_file(
-                        notes_dict,
-                        args.notes_file,
-                        get_notebook_language(processed_notebook),
-                    )
+                write_notes_file(
+                    notes_dict,
+                    args.notes_file,
+                    get_notebook_language(processed_notebook),
+                )
 
             try:
                 json.dump(processed_notebook, sys.stdout, indent=1)
@@ -171,7 +172,8 @@ class ScrubProject:
     help: ClassVar[str] = (
         'Executes notebook scrubbing using project configuration. '
         'Searches for .ipynb-scrubber.toml or pyproject.toml with '
-        '[tool.ipynb-scrubber] section.'
+        '[tool.ipynb-scrubber] section. The configured files are written '
+        'as a batch: if any one of them fails, none are written.'
     )
     name = 'scrub-project'
 
@@ -196,12 +198,15 @@ class ScrubProject:
             printe(f'Error: {e}')
             return 1
 
+        try:
+            scrub_files(config.files)
+        except ScrubberError as e:
+            printe(f'✗ {e}')
+            return 1
+
+        # Reported only once the batch is committed, which is the moment each
+        # of these lines becomes true.
         for file_entry in config.files:
-            try:
-                scrub_file(file_entry)
-            except ScrubberError as e:
-                printe(f'✗ Error processing {file_entry.input}: {e}')
-                return 1
             printe(f'✓ Processed: {file_entry.input} → {file_entry.output}')
 
         return 0

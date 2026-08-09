@@ -2,6 +2,7 @@ import copy
 
 import pytest
 
+from ipynb_scrubber import staging
 from ipynb_scrubber.config import ScrubbingOptions
 from ipynb_scrubber.exceptions import InvalidNotebookError, ProcessingError
 from ipynb_scrubber.notebook import get_notebook_language
@@ -213,6 +214,23 @@ def test_notes_file_write_error_is_a_processing_error(tmp_path):
 
     with pytest.raises(ProcessingError, match='Error writing notes file'):
         write_notes_file({'ex-1': 'x = 1'}, path)
+
+
+def test_notes_file_that_cannot_be_moved_into_place_leaves_no_temp_file(
+    tmp_path,
+    monkeypatch,
+):
+    """A notes file is staged beside its target and cleaned up if it can't land."""
+
+    def boom(staged):
+        raise OSError('rename failed')
+
+    monkeypatch.setattr(staging, 'commit', boom)
+
+    with pytest.raises(ProcessingError, match='Error writing notes file'):
+        write_notes_file({'ex-1': 'x = 1'}, tmp_path / 'notes.md')
+
+    assert list(tmp_path.iterdir()) == []
 
 
 # --- notebook-level validation -------------------------------------------

@@ -49,11 +49,18 @@ def test_note_tag_flag_reaches_the_options(scrub_notebook, make_notebook, code):
     assert "Option 'keepme' is not supported as a cell tag" in result.stderr
 
 
-def test_notes_without_notes_file_warns(scrub_notebook, make_notebook, code):
+def test_notes_without_notes_file_is_an_error(scrub_notebook, make_notebook, code):
+    """Notes with nowhere to go is fatal, and the error names the remedy.
+
+    The exercise notebook would reference notes by id, so emitting it without
+    the notes file leaves the reader chasing a file that does not exist.
+    """
     nb = make_notebook(code('#| scrub-note: ex-1\nsecret = 1'))
     result = scrub_notebook(input_data=json.dumps(nb))
-    assert result.returncode == 0
-    assert 'no --notes-file specified' in result.stderr
+    assert result.returncode == 1
+    assert result.stdout == ''
+    assert '--notes-file' in result.stderr
+    assert 'Traceback' not in result.stderr
 
 
 def test_notes_file_is_written(tmp_path, scrub_notebook, make_notebook, code):
