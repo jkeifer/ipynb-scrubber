@@ -78,7 +78,7 @@ def test_input_notebook_is_untouched_on_success(make_notebook, code):
     """
     nb = make_notebook(
         code(
-            '#| scrub-clear\nsecret = 1',
+            '#| scrub-clear:\nsecret = 1',
             outputs=[{'output_type': 'stream', 'text': ['1\n']}],
             execution_count=3,
         ),
@@ -139,7 +139,7 @@ def test_notes_capture_original_source_before_clearing():
 
 
 def test_omitted_cells_are_removed():
-    nb = notebook(('code', 'keep = 1'), ('code', '#| scrub-omit\ndrop = 2'))
+    nb = notebook(('code', 'keep = 1'), ('code', '#| scrub-omit:\ndrop = 2'))
     result, _ = process_notebook(nb, OPTS)
     assert [c['source'] for c in result['cells']] == ['keep = 1']
 
@@ -354,7 +354,7 @@ def test_custom_clear_tag(make_notebook, code):
     """Only the configured clear tag clears; the default tag is inert."""
     nb = make_notebook(
         code('secret = 1', metadata={'tags': ['answer']}),
-        code('#| scrub-clear\nother_secret = 2'),
+        code('#| scrub-clear:\nother_secret = 2'),
     )
     opts = ScrubbingOptions(clear_tag='answer')
     result, _ = process_notebook(nb, opts)
@@ -372,7 +372,7 @@ def test_custom_clear_text(make_notebook, code):
 def test_quarto_clear_with_inline_text_and_empty_text(make_notebook, code):
     nb = make_notebook(
         code('#| scrub-clear: Custom replacement text\nprint("solution")'),
-        code('#| scrub-clear: \nprint("empty text")'),
+        code('#| scrub-clear: ""\nprint("empty text")'),
     )
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == 'Custom replacement text'
@@ -382,14 +382,14 @@ def test_quarto_clear_with_inline_text_and_empty_text(make_notebook, code):
 def test_markdown_cell_clearing(make_notebook, markdown):
     nb = make_notebook(
         markdown(
-            '<!-- scrub-clear: **Your answer here** -->\n\n'
+            '<!-- scrub-clear: "**Your answer here**" -->\n\n'
             '## Question 1\n\nWhat is the answer?',
         ),
         markdown(
             '## Question 2\n\nThis is an answer that should be cleared.',
             metadata={'tags': ['scrub-clear']},
         ),
-        markdown('<!-- scrub-clear -->\n\n## Question 3\n\nAnother answer to clear.'),
+        markdown('<!-- scrub-clear: -->\n\n## Question 3\n\nAnother answer to clear.'),
     )
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == '**Your answer here**'
@@ -450,35 +450,28 @@ def test_markdown_cell_multiline_block(make_notebook, markdown):
     )
 
 
-def test_inline_escape_sequences(make_notebook, code):
-    """Escapes are expanded in inline values."""
-    nb = make_notebook(code('#| scrub-clear: line one\\nline two\nprint("x")'))
+def test_quoted_escape_sequences(make_notebook, code):
+    """A double-quoted value expands escapes, so one line can carry two."""
+    nb = make_notebook(code('#| scrub-clear: "line one\\nline two"\nprint("x")'))
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == 'line one\nline two'
 
 
-def test_inline_text_with_block_errors(make_notebook, code):
-    """Inline text plus a block is a hard error."""
+def test_malformed_header_errors(make_notebook, code):
+    """A header that is not valid YAML fails the run, naming the cell."""
     nb = make_notebook(
-        code('#| scrub-clear: some text |\n#|   more text\nprint("x")'),
+        code('# Intro'),
+        code('#| scrub-clear: **bold**\nprint("x")'),
     )
     with pytest.raises(
         ProcessingError,
-        match=r'^Cell 0: .*both inline text and a block',
+        match=r'^Cell 1: Invalid cell option header',
     ):
         process_notebook(nb, OPTS)
 
 
-def test_inline_plus_block_errors_for_markdown(make_notebook, markdown):
-    nb = make_notebook(
-        markdown('<!-- scrub-clear: some text |\n  more text\n-->\n## Solution'),
-    )
-    with pytest.raises(ProcessingError, match='inline text and a block'):
-        process_notebook(nb, OPTS)
-
-
-def test_unterminated_markdown_block_errors(make_notebook, markdown):
-    """An unterminated markdown block is a hard error naming the cell."""
+def test_unterminated_markdown_comment_errors(make_notebook, markdown):
+    """An unterminated markdown comment is a hard error naming the cell."""
     nb = make_notebook(
         markdown('# Intro'),
         markdown('<!-- scrub-clear: |\n  never closed'),
@@ -503,7 +496,7 @@ def test_omit_via_metadata_tag(make_notebook, markdown, code):
 
 def test_omit_via_source_option(make_notebook, code):
     nb = make_notebook(
-        code("#| scrub-omit\nprint('omit me')"),
+        code("#| scrub-omit:\nprint('omit me')"),
         code("print('keep me')"),
     )
     result, _ = process_notebook(nb, OPTS)
@@ -542,7 +535,7 @@ def test_two_source_options_on_one_cell_is_an_error(make_notebook, code):
     rather than an implicit precedence, because an under-indented block
     content line would otherwise be indistinguishable from a sibling option.
     """
-    nb = make_notebook(code('#| scrub-omit\n#| scrub-note: ex-1\nsecret = 1'))
+    nb = make_notebook(code('#| scrub-omit:\n#| scrub-note: ex-1\nsecret = 1'))
     with pytest.raises(ProcessingError, match=r'only one .* option per cell'):
         process_notebook(nb, OPTS)
 
@@ -593,10 +586,14 @@ def test_note_cell_captures_original_and_clears(make_notebook, code):
     )
 
 
-def test_note_cell_with_custom_inline_replacement(make_notebook, code):
+def test_note_cell_with_custom_replacement(make_notebook, code):
     nb = make_notebook(
         code(
-            '#| scrub-note: my-note | # YOUR CODE HERE\ndef solution():\n    return 42',
+            '#| scrub-note:\n'
+            '#|   id: my-note\n'
+            '#|   text: "# YOUR CODE HERE"\n'
+            'def solution():\n'
+            '    return 42',
         ),
     )
     result, notes = process_notebook(nb, OPTS)
@@ -607,10 +604,9 @@ def test_note_cell_with_custom_inline_replacement(make_notebook, code):
 @pytest.mark.parametrize(
     'source',
     [
-        '#| scrub-note\ndef solution():\n    return 42',
         '#| scrub-note:\ndef solution():\n    return 42',
-        '#| scrub-note: | # YOUR CODE HERE\ndef solution():\n    return 42',
-        '#| scrub-note: |\n#|   # YOUR CODE HERE\ndef solution():\n    return 42',
+        '#| scrub-note: ""\ndef solution():\n    return 42',
+        '#| scrub-note:\n#|   text: "# YOUR CODE HERE"\ndef solution():\n    return 42',
     ],
 )
 def test_note_cell_without_id_errors(make_notebook, code, source):
@@ -621,12 +617,14 @@ def test_note_cell_without_id_errors(make_notebook, code, source):
 
 
 def test_note_cell_block_replacement(make_notebook, code):
-    """A note's replacement text can come from a block."""
+    """A note's replacement text can span lines via a block scalar."""
     nb = make_notebook(
         code(
-            '#| scrub-note: ex-1 |\n'
-            '#|   def add(a, b):\n'
-            '#|       pass\n'
+            '#| scrub-note:\n'
+            '#|   id: ex-1\n'
+            '#|   text: |\n'
+            '#|     def add(a, b):\n'
+            '#|         pass\n'
             'def add(a, b):\n'
             '    return a + b',
         ),
@@ -638,27 +636,20 @@ def test_note_cell_block_replacement(make_notebook, code):
     assert 'ex-1' in notes
 
 
-def test_note_cell_block_opener_without_body(make_notebook, code):
-    """A block opener with no body clears the cell to just the note reference."""
-    nb = make_notebook(code('#| scrub-note: my-id |\ndef solution():\n    return 42'))
+def test_note_cell_with_empty_replacement(make_notebook, code):
+    """Empty replacement text clears the cell to just the note reference."""
+    nb = make_notebook(
+        code(
+            '#| scrub-note:\n'
+            '#|   id: my-id\n'
+            '#|   text: ""\n'
+            'def solution():\n'
+            '    return 42',
+        ),
+    )
     result, notes = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == '# (See notes: my-id)'
     assert 'my-id' in notes
-
-
-@pytest.mark.parametrize(
-    'source',
-    [
-        '#| scrub-note: ex-1|# YOUR CODE HERE\nprint("x")',
-        '#| scrub-note: ex-1 |# YOUR CODE HERE\nprint("x")',
-        '#| scrub-note: ex-1 | # YOUR CODE HERE\nprint("x")',
-    ],
-)
-def test_note_separator_is_whitespace_insensitive(make_notebook, code, source):
-    """The id/replacement split is on the first pipe, regardless of spacing."""
-    nb = make_notebook(code(source))
-    result, _ = process_notebook(nb, OPTS)
-    assert result['cells'][0]['source'] == '# (See notes: ex-1)\n# YOUR CODE HERE'
 
 
 def test_note_cell_non_code_errors(make_notebook, markdown):
@@ -671,46 +662,19 @@ def test_note_cell_non_code_errors(make_notebook, markdown):
         process_notebook(nb, OPTS)
 
 
-def test_note_cell_inline_text_with_block_errors(make_notebook, code):
-    """A note with both inline replacement text and a block is a hard error."""
+def test_note_cell_rejects_an_unknown_key(make_notebook, code):
+    """A misspelled key fails the run rather than being silently dropped."""
     nb = make_notebook(
         code(
-            '#| scrub-note: ex-1 | # TODO |\n'
-            '#|   # YOUR CODE HERE\n'
+            '#| scrub-note:\n'
+            '#|   id: ex-1\n'
+            '#|   txet: "# YOUR CODE HERE"\n'
             'def solution():\n'
             '    return 42',
         ),
     )
-    with pytest.raises(
-        ProcessingError,
-        match=r'^Cell 0: .*both inline text and a block',
-    ):
+    with pytest.raises(ProcessingError, match=r'^Cell 0: Unknown scrub-note key'):
         process_notebook(nb, OPTS)
-
-
-def test_note_cell_id_then_block_is_not_an_error(make_notebook, code):
-    """An id with a bare block opener is the ordinary multi-line note form."""
-    nb = make_notebook(
-        code(
-            '#| scrub-note: ex-1 |\n'
-            '#|   # YOUR CODE HERE\n'
-            'def solution():\n'
-            '    return 42',
-        ),
-    )
-    result, notes = process_notebook(nb, OPTS)
-    assert result['cells'][0]['source'] == '# (See notes: ex-1)\n# YOUR CODE HERE'
-    assert 'ex-1' in notes
-
-
-def test_note_cell_inline_text_without_block_is_not_an_error(make_notebook, code):
-    """Inline replacement text with no block remains the ordinary inline form."""
-    nb = make_notebook(
-        code('#| scrub-note: ex-1 | # TODO\ndef solution():\n    return 42'),
-    )
-    result, notes = process_notebook(nb, OPTS)
-    assert result['cells'][0]['source'] == '# (See notes: ex-1)\n# TODO'
-    assert 'ex-1' in notes
 
 
 def test_note_cell_with_custom_note_tag(make_notebook, code):

@@ -217,22 +217,27 @@ is valid only in code cells; using it elsewhere is an error.
 
 Use cell-type-appropriate syntax for more control, including custom replacement
 text. The option header must be the first non-blank content in the cell's
-source — a `#| scrub-clear` (or `<!-- scrub-clear -->`) preceded by any other
-line is not recognized as an option and is silently left as ordinary source:
+source — a `#| scrub-clear:` (or `<!-- scrub-clear: -->`) preceded by any other
+line is not recognized as an option and is silently left as ordinary source.
+
+The header is YAML, the same language Quarto's `#|` header is written in. Every
+option is a `name: value` entry, the colon is required even when there is no
+value, and values follow YAML's rules for quoting, typing and multi-line text.
+Names the tool does not define, including Quarto's own options, are ignored.
 
 #### Code Cells - Quarto Options
 
 ```python
-#| scrub-clear
+#| scrub-clear:
 def secret_solution():
     return 42
 
 # Or with custom replacement text:
-#| scrub-clear: # WRITE YOUR SOLUTION HERE
+#| scrub-clear: "# WRITE YOUR SOLUTION HERE"
 def another_solution():
     return "hidden"
 
-# To save to notes and clear (requires ID):
+# To save to notes and clear (requires an id):
 #| scrub-note: exercise-1
 def solution_with_notes():
     # This solution will be saved to the notes file
@@ -240,12 +245,14 @@ def solution_with_notes():
     return "answer"
 
 # With custom replacement text:
-#| scrub-note: exercise-2 | # YOUR SOLUTION HERE
+#| scrub-note:
+#|   id: exercise-2
+#|   text: "# YOUR SOLUTION HERE"
 def another_noted_solution():
     return "more answers"
 
 # To omit entirely:
-#| scrub-omit
+#| scrub-omit:
 # This cell will be removed
 print("Instructor only!")
 ```
@@ -253,19 +260,17 @@ print("Instructor only!")
 #### Markdown Cells - HTML Comments
 
 ```markdown
-<!-- scrub-clear -->
+<!-- scrub-clear: -->
 ## Answer
 
 The solution is 42 because...
 
-<!-- Or with custom replacement text: -->
-<!-- scrub-clear: **Write your answer here** -->
+<!-- scrub-clear: "**Write your answer here**" -->
 ## Another Question
 
-This answer will be replaced.
+This answer will be replaced, with custom text.
 
-<!-- To omit entirely: -->
-<!-- scrub-omit -->
+<!-- scrub-omit: -->
 ## Instructor Notes
 
 These notes are only for the instructor.
@@ -295,14 +300,27 @@ cleared content:
 
 - `#| scrub-clear: Your custom text` (code cells)
 - `<!-- scrub-clear: Your custom text -->` (markdown cells)
-- Empty text: `#| scrub-clear:` (results in empty cell)
+- Empty text: `#| scrub-clear: ""` (results in empty cell)
 
-If no custom text is provided, the default `--clear-text` value is used.
+An option written with no value at all — `#| scrub-clear:` — uses the default
+`--clear-text` value.
+
+**Quote replacement text that starts with `#`.** An unquoted `#` opens a YAML
+comment, so `#| scrub-clear: # TODO` supplies no text and falls back to the
+default. Write `#| scrub-clear: "# TODO"` instead. The same goes for text
+starting with `*`, `&`, `!`, `|`, `>`, `[`, `{`, `%`, `@` or `` ` ``, and for
+text containing `: `. Quoting is always safe, so quote when in doubt.
+
+Values keep the type YAML gives them, and a value that is not text is an error
+rather than a surprise. `#| scrub-clear: no` is the boolean false, so it fails
+the run instead of clearing the cell to `False`; write `#| scrub-clear: "no"`
+to mean the word.
 
 #### Multi-line Replacement Text
 
-Use a `|` block for replacement text spanning several lines. Content is
-indented relative to the option, and that indentation is stripped:
+Use a YAML block scalar for replacement text spanning several lines. The `|`
+opens the block, content is indented relative to the option, and that
+indentation is stripped:
 
 ```python
 #| scrub-clear: |
@@ -322,47 +340,33 @@ def add(a, b):
 ## Solution
 ```
 
-**Indent the content more deeply than the option line.** Content at or below
-the option's own indentation ends the block and is then read as further
-options:
+A block scalar is verbatim: no comment stripping, no escapes, no quoting. That
+makes it the right place for content full of backslashes or `#`, such as
+regexes or LaTeX.
+
+**Indent the content more deeply than the option line.** Content at the
+option's own indentation is a sibling option instead of block content:
 
 ```python
 #| scrub-clear: |
-#| def add(a, b):
-#|     pass
+#| scrub-omit:          <- error, not a silent cell deletion
 ```
 
-That yields an empty replacement plus two meaningless options. Where it would
-be dangerous — an under-indented line naming another scrubber option — it is
-an error instead, because a cell may carry at most one scrubber option in its
-source header:
+A cell's source header may carry at most one scrubber option, so that mistake
+fails the run rather than quietly deleting the cell. Options that are not
+scrubber options, such as Quarto's own, remain valid siblings:
 
 ```python
-#| scrub-clear: |
-#| scrub-omit          <- error, not a silent cell deletion
-```
-
-Options that are not scrubber options, such as Quarto's own, remain valid
-siblings:
-
-```python
-#| scrub-note: ex-1 |
+#| scrub-note: ex-1
 #| echo: false
 ```
 
-Tabs are accepted and expanded to their normal width when measuring
-indentation, so a tab-indented block works.
+**Indent with spaces.** YAML forbids a tab in indentation, and a header
+containing one is reported as such.
 
-In a code block, an interior blank line must still carry its `#|` marker. A
-genuinely empty line ends the block entirely, so the first of these yields
-only `a` while the second yields `a`, a blank line, and `b`:
-
-```python
-#| scrub-clear: |
-#|   a
-
-#|   b
-```
+In a code cell, a blank line inside a block scalar may keep its `#|` marker or
+drop it. Both of these yield `a`, a blank line, and `b`, because a blank line
+belongs to the header whenever another `#|` line follows it:
 
 ```python
 #| scrub-clear: |
@@ -371,52 +375,46 @@ only `a` while the second yields `a`, a blank line, and `b`:
 #|   b
 ```
 
-Note that in the first form the `#|   b` line, once the block has ended, is
-read as a *new option* named `b`. It is ignored because no such scrubber
-option exists, but keep the `#|` marker on interior blank lines to avoid the
-surprise.
-
-The markdown form differs here: it ends at a line containing only `-->`, and
-until then a real blank line is kept verbatim, as in the example above.
-
-A markdown block also requires the comment to stay *open*. The `|` must be the
-last thing on the line, with the `-->` on its own line later. A closed
-one-liner like `<!-- scrub-clear: | -->` is read as ordinary inline text, and
-the replacement becomes the literal string `|`.
-
-Blocks are taken verbatim — no escape processing — which makes them the right
-place for content containing backslashes, such as regexes or LaTeX.
-
-Inline text and a block are mutually exclusive: writing text on the option line
-*and* opening a block is an error, not a concatenation.
-
 ```python
-#| scrub-clear: some text |
-#|   more text
+#| scrub-clear: |
+#|   a
+
+#|   b
 ```
 
-Use one or the other. If the trailing `|` was meant as literal text rather than
-a block opener, escape it as `\|`.
+In a markdown cell the comment stays open across the block: the `|` is the last
+thing on its line, the content follows, and a line containing only `-->` closes
+the header. Blank lines up to it are kept verbatim, as in the example above. A
+comment that is never closed is an error.
 
 Repeating an option name within one cell's header is an error, as is reusing
-the same `scrub-note` id anywhere in a notebook — both previously resolved
-silently by keeping the last one, which in the note case discarded an
-instructor solution.
+the same `scrub-note` id anywhere in a notebook. Either would otherwise resolve
+by keeping the last one, which in the note case discards an instructor
+solution.
 
-A cell's source header may carry at most one scrubber option. Combining them
-in the header is an error rather than a precedence puzzle. Metadata tags are
-unaffected: a cell tagged both `scrub-omit` and `scrub-note` is still simply
-omitted, and a `scrub-omit` tag still wins over a `#| scrub-note:` in source.
+Combining scrubber options in one header is an error rather than a precedence
+puzzle. Metadata tags are unaffected: a cell tagged both `scrub-omit` and
+`scrub-note` is still simply omitted, and a `scrub-omit` tag still wins over a
+`#| scrub-note:` in source.
 
-#### Escape Sequences
+#### Quoting and Escapes
 
-Single-line values expand `\n`, `\t`, `\\`, and `\|`. Any other backslash
-sequence is left untouched, so `#| scrub-clear: re.match(r"\d+")` works as
-written.
+A double-quoted value expands YAML's escapes, so `\n` and `\t` fit on a single
+line:
 
-Escapes apply only to in-cell options, because that is the only place with no
-other way to write a newline. `--clear-text` and TOML `clear-text` use their
-own native mechanisms instead:
+```python
+#| scrub-clear: "line one\nline two"
+```
+
+A single-quoted value is literal, which suits a regex:
+
+```python
+#| scrub-clear: 're.match(r"\d+", s)'
+```
+
+A block scalar is literal too, and handles several lines at once.
+
+`--clear-text` and TOML `clear-text` use their own native mechanisms:
 
 ```bash
 ipynb-scrubber scrub-notebook \
@@ -451,40 +449,39 @@ nowhere to put one. A cell tagged `scrub-note` fails the run rather than being
 ignored, because ignoring it would ship the solution to students. (A cell
 tagged both `scrub-omit` and `scrub-note` is simply omitted.)
 
-**Required format:**
+**Required format:** the option takes either the note id on its own, or a
+mapping carrying the id and the text to leave in the cleared cell.
+
+Just the id, which leaves the configured clear text behind:
+
 ```python
 #| scrub-note: note-id
-#| scrub-note: note-id | custom replacement text
-#| scrub-note: note-id |
-#|   multi-line replacement
-#|   from the block below
 ```
 
-The id is split from the replacement text at the first `|`. A block always
-supplies the replacement, never the id. **The id is required** — a `scrub-note`
-without one is an error.
-
-Whitespace around the splitting `|` is irrelevant, so these all parse to the id
-`ex-1` with the replacement `text`:
+With custom replacement text:
 
 ```python
-#| scrub-note: ex-1 | text
-#| scrub-note: ex-1|text
-#| scrub-note: ex-1 |text
-```
-
-These, by contrast, are all errors rather than silent skips:
-
-```python
-#| scrub-note
 #| scrub-note:
-#| scrub-note: | text
+#|   id: note-id
+#|   text: "# YOUR CODE HERE"
 ```
 
-As with `scrub-clear`, inline replacement text and a block are mutually
-exclusive — `#| scrub-note: ex-1 | some text |` followed by block lines is an
-error. Use one or the other, or escape a genuinely intended trailing pipe as
-`\|`.
+With replacement text spanning several lines:
+
+```python
+#| scrub-note:
+#|   id: note-id
+#|   text: |
+#|     multi-line replacement
+#|     from the block below
+```
+
+`id` is required and must be a non-empty string. `text` is optional and
+defaults to the configured clear text. Any other key is an error, as is a value
+that is neither an id nor a mapping.
+
+**The id is required.** A `scrub-note` with no id, an empty id, or a mapping
+that omits `id`, is an error rather than a silent skip.
 
 The `note-id` should be a human-readable identifier (e.g., `exercise-1`,
 `question-2a`). When the cell is cleared, a reference comment is automatically
@@ -567,7 +564,7 @@ print("Exercise: implement the functions below")
 **Code Cell 2** (Quarto option with custom text):
 
 ```python
-#| scrub-clear: # TODO: Write your add function here
+#| scrub-clear: "# TODO: Write your add function here"
 def add(a, b):
     return a + b
 
@@ -578,7 +575,7 @@ print(f"Result: {result}")
 **Markdown Cell 3** (HTML comment):
 
 ```markdown
-<!-- scrub-clear: **Write your explanation here** -->
+<!-- scrub-clear: "**Write your explanation here**" -->
 ## Solution Explanation
 
 The add function works by using the + operator...

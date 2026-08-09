@@ -17,7 +17,7 @@ def test_output_is_valid_json_indented_by_one(scrub_notebook, make_notebook, cod
 
 
 def test_flags_reach_the_options(scrub_notebook, make_notebook, code):
-    nb = make_notebook(code('#| my-clear\nsecret = 1'))
+    nb = make_notebook(code('#| my-clear:\nsecret = 1'))
     result = scrub_notebook(
         '--clear-tag',
         'my-clear',
@@ -71,7 +71,7 @@ def test_notes_file_is_not_written_when_processing_fails(
     code,
 ):
     """A validation failure leaves no partial or stale notes file on disk."""
-    nb = make_notebook(code('#| scrub-note\nsecret = 1'))  # missing id: error
+    nb = make_notebook(code('#| scrub-note:\nsecret = 1'))  # missing id: error
     notes = tmp_path / 'notes.md'
     result = scrub_notebook('--notes-file', str(notes), input_data=json.dumps(nb))
     assert result.returncode == 1

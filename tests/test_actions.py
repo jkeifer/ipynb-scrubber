@@ -16,35 +16,45 @@ def test_plain_cell_is_kept():
 
 
 def test_omit_via_source_option():
-    assert decide(cell('#| scrub-omit\nx = 1'), OPTS) == Omit()
+    assert decide(cell('#| scrub-omit:\nx = 1'), OPTS) == Omit()
 
 
 def test_omit_via_tag():
     assert decide(cell('x = 1', tags=['scrub-omit']), OPTS) == Omit()
 
 
-def test_clear_uses_configured_default_when_bare():
-    assert decide(cell('#| scrub-clear\nx = 1'), OPTS) == Clear(OPTS.clear_text)
+def test_omit_with_a_value_errors():
+    """Presence is the whole signal, so a value means the author meant something."""
+    with pytest.raises(ProcessingError, match='takes no value'):
+        decide(cell('#| scrub-omit: true\nx = 1'), OPTS)
+
+
+def test_clear_uses_configured_default_when_valueless():
+    assert decide(cell('#| scrub-clear:\nx = 1'), OPTS) == Clear(OPTS.clear_text)
 
 
 def test_clear_uses_inline_text():
     assert decide(cell('#| scrub-clear: do it\nx = 1'), OPTS) == Clear('do it')
 
 
-def test_clear_empty_value_is_not_the_default():
-    assert decide(cell('#| scrub-clear:\nx = 1'), OPTS) == Clear('')
+def test_clear_empty_string_is_not_the_default():
+    assert decide(cell('#| scrub-clear: ""\nx = 1'), OPTS) == Clear('')
+
+
+def test_clear_uses_a_block_scalar_for_multiple_lines():
+    source = '#| scrub-clear: |\n#|   def add(a, b):\n#|       pass\nx = 1'
+    assert decide(cell(source), OPTS) == Clear('def add(a, b):\n    pass')
+
+
+def test_clear_rejects_a_value_that_is_not_text():
+    """'no' is a YAML boolean, and clearing a cell to 'False' is never meant."""
+    with pytest.raises(ProcessingError, match='takes replacement text'):
+        decide(cell('#| scrub-clear: no\nx = 1'), OPTS)
 
 
 def test_note_defaults_to_clear_text():
     assert decide(cell('#| scrub-note: ex-1\nx = 1'), OPTS) == Note(
         'ex-1',
-        OPTS.clear_text,
-    )
-
-
-def test_note_with_escaped_pipe_in_id():
-    assert decide(cell(r'#| scrub-note: a\|b' + '\nx = 1'), OPTS) == Note(
-        'a|b',
         OPTS.clear_text,
     )
 
@@ -57,33 +67,32 @@ def test_omit_tag_beats_note_tag():
 def test_multiple_scrubber_options_in_one_header_error():
     """No block is present, so the block-indentation hint would be nonsense.
 
-    '#| scrub-omit' + '#| scrub-note: ex-1' has no block opener anywhere, so
+    '#| scrub-omit:' + '#| scrub-note: ex-1' has no block opener anywhere, so
     suggesting the reader re-indent a block is wrong advice; the hint must
     not be appended.
     """
     with pytest.raises(ProcessingError, match=r'only one .* option per cell') as exc:
-        decide(cell('#| scrub-omit\n#| scrub-note: ex-1\nx = 1'), OPTS)
+        decide(cell('#| scrub-omit:\n#| scrub-note: ex-1\nx = 1'), OPTS)
     assert 'indent it more deeply' not in str(exc.value)
 
 
 def test_multiple_scrubber_options_catches_underindented_block_content():
     """The F5 hazard: block content that lost its indentation.
 
-    '#| scrub-omit' here is indistinguishable from a sibling option at the
-    syntax level, and reading it as one would silently delete the cell. A
-    block is present, so the indentation hint is relevant and must be
-    appended.
+    '#| scrub-omit:' here is an empty block scalar plus a sibling option, and
+    reading it that way would silently delete the cell. A block is present, so
+    the indentation hint is relevant and must be appended.
     """
     with pytest.raises(ProcessingError, match=r'only one .* option per cell') as exc:
-        decide(cell('#| scrub-clear: |\n#| scrub-omit\nSECRET = 1'), OPTS)
+        decide(cell('#| scrub-clear: |\n#| scrub-omit:\nSECRET = 1'), OPTS)
     assert 'indent it more deeply' in str(exc.value)
 
 
 def test_non_scrubber_sibling_options_are_allowed():
-    """A Quarto option after an empty block opener must stay legal."""
-    assert decide(cell('#| scrub-note: ex-1 |\n#| echo: false\nx = 1'), OPTS) == Note(
+    """A Quarto option alongside a scrubber option must stay legal."""
+    assert decide(cell('#| scrub-note: ex-1\n#| echo: false\nx = 1'), OPTS) == Note(
         'ex-1',
-        '',
+        OPTS.clear_text,
     )
 
 
@@ -106,11 +115,48 @@ def test_note_on_markdown_errors():
 
 @pytest.mark.parametrize(
     'source',
-    ['#| scrub-note', '#| scrub-note:', '#| scrub-note: | text'],
+    [
+        '#| scrub-note:',
+        '#| scrub-note: ""',
+        '#| scrub-note: 12',
+        '#| scrub-note:\n#|   id:',
+        '#| scrub-note:\n#|   text: hello',
+    ],
 )
 def test_note_without_id_errors(source):
     with pytest.raises(ProcessingError, match='requires an id'):
         decide(cell(f'{source}\nx = 1'), OPTS)
+
+
+def test_note_mapping_supplies_replacement_text():
+    source = '\n'.join(
+        [
+            '#| scrub-note:',
+            '#|   id: ex-1',
+            '#|   text: |',
+            '#|     def add(a, b):',
+            '#|         pass',
+            'x = 1',
+        ],
+    )
+    assert decide(cell(source), OPTS) == Note('ex-1', 'def add(a, b):\n    pass')
+
+
+def test_note_mapping_without_text_uses_the_default():
+    source = '#| scrub-note:\n#|   id: ex-1\nx = 1'
+    assert decide(cell(source), OPTS) == Note('ex-1', OPTS.clear_text)
+
+
+def test_note_mapping_rejects_an_unknown_key():
+    source = '#| scrub-note:\n#|   id: ex-1\n#|   txet: oops\nx = 1'
+    with pytest.raises(ProcessingError, match='Unknown scrub-note key'):
+        decide(cell(source), OPTS)
+
+
+def test_note_mapping_rejects_text_that_is_not_a_string():
+    source = '#| scrub-note:\n#|   id: ex-1\n#|   text: 3.5\nx = 1'
+    with pytest.raises(ProcessingError, match='takes replacement text'):
+        decide(cell(source), OPTS)
 
 
 def test_apply_strips_outputs_and_execution_count():
@@ -151,29 +197,6 @@ def test_apply_note_writes_reference_comment():
 def test_apply_note_with_empty_text_omits_the_newline():
     result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', ''))
     assert result['source'] == '# (See notes: ex-1)'
-
-
-def test_note_inline_text_and_block_conflict_errors():
-    """Wording matches Option.single_text's conflict message (options.py):
-
-    the same mistake on scrub-clear vs scrub-note must get the same advice,
-    including the '\\|' escape hint.
-    """
-    with pytest.raises(
-        ProcessingError,
-        match=r"has both inline text and a block.*escape a literal pipe as '\\\|'",
-    ):
-        decide(
-            cell('#| scrub-note: ex-1 | inline text |\n#|   more\nx = 1'),
-            OPTS,
-        )
-
-
-def test_note_uses_inline_replacement_text():
-    assert decide(cell('#| scrub-note: ex-1 | inline text\nx = 1'), OPTS) == Note(
-        'ex-1',
-        'inline text',
-    )
 
 
 def test_clear_via_tag_only():
