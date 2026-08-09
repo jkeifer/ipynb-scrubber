@@ -60,6 +60,10 @@ ipynb-scrubber scrub-notebook < input.ipynb > output.ipynb
 - `--clear-text TEXT`: Replacement text for cleared cells where unspecified
   (default: `# TODO: Implement this`)
 - `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
+- `--note-tag TAG`: Option name marking cells to save to notes
+  (default: `scrub-note`)
+- `--notes-file PATH`: Path to write the notes file for cells with the note
+  tag (see [Notes Files](#notes-files))
 
 #### Examples
 
@@ -114,6 +118,7 @@ Create a `.ipynb-scrubber.toml` file with global options and file entries:
 clear-tag = "scrub-clear"
 clear-text = "# TODO: Implement this"
 omit-tag = "scrub-omit"
+note-tag = "scrub-note"
 
 # File entries (required - at least one)
 [[files]]
@@ -139,6 +144,17 @@ Each file entry supports:
 - `clear-tag` (optional): Override global clear tag
 - `clear-text` (optional): Override global clear text
 - `omit-tag` (optional): Override global omit tag
+- `note-tag` (optional): Override global note tag
+- `notes-file` (optional): Path to write the notes file for this notebook
+
+Overrides are presence-based, not truthiness-based: a file entry that sets
+`clear-text = ""` gets an empty string for that file rather than falling back
+to the global default.
+
+Unknown keys anywhere in the config — the top level, `[options]`, or a
+`[[files]]` entry — are rejected, and the error names the invalid key and
+lists the valid ones, so a misspelled `clear-tagg` fails the run instead of
+silently leaving solution cells unscrubbed.
 
 **Option 2: Using `pyproject.toml`**
 
@@ -297,8 +313,8 @@ def add(a, b):
 ```
 
 **Indent the content more deeply than the option line.** Content at or below
-the option's own indentation ends the block, so this collects nothing and
-clears the cell to nothing at all:
+the option's own indentation ends the block and is then read as further
+options:
 
 ```python
 #| scrub-clear: |
@@ -306,8 +322,26 @@ clears the cell to nothing at all:
 #|     pass
 ```
 
-This cannot be flagged as an error, because an empty block is meaningful for
-`scrub-note`, so mind the indentation.
+That yields an empty replacement plus two meaningless options. Where it would
+be dangerous — an under-indented line naming another scrubber option — it is
+an error instead, because a cell may carry at most one scrubber option in its
+source header:
+
+```python
+#| scrub-clear: |
+#| scrub-omit          <- error, not a silent cell deletion
+```
+
+Options that are not scrubber options, such as Quarto's own, remain valid
+siblings:
+
+```python
+#| scrub-note: ex-1 |
+#| echo: false
+```
+
+Tabs are accepted and expanded to their normal width when measuring
+indentation, so a tab-indented block works.
 
 In a code block, an interior blank line must still carry its `#|` marker. A
 genuinely empty line ends the block entirely, so the first of these yields
@@ -326,6 +360,11 @@ only `a` while the second yields `a`, a blank line, and `b`:
 #|
 #|   b
 ```
+
+Note that in the first form the `#|   b` line, once the block has ended, is
+read as a *new option* named `b`. It is ignored because no such scrubber
+option exists, but keep the `#|` marker on interior blank lines to avoid the
+surprise.
 
 The markdown form differs here: it ends at a line containing only `-->`, and
 until then a real blank line is kept verbatim, as in the example above.
@@ -348,6 +387,16 @@ Inline text and a block are mutually exclusive: writing text on the option line
 
 Use one or the other. If the trailing `|` was meant as literal text rather than
 a block opener, escape it as `\|`.
+
+Repeating an option name within one cell's header is an error, as is reusing
+the same `scrub-note` id anywhere in a notebook — both previously resolved
+silently by keeping the last one, which in the note case discarded an
+instructor solution.
+
+A cell's source header may carry at most one scrubber option. Combining them
+in the header is an error rather than a precedence puzzle. Metadata tags are
+unaffected: a cell tagged both `scrub-omit` and `scrub-note` is still simply
+omitted, and a `scrub-omit` tag still wins over a `#| scrub-note:` in source.
 
 #### Escape Sequences
 
@@ -380,6 +429,11 @@ A `\n` in a TOML *literal* string (single quotes) stays literal.
 its content saved to a separate Markdown file before being cleared from the
 student version. This creates bidirectional linking between the exercise and
 solutions.
+
+Markdown notes are not supported. The reference text inserted into the cleared
+cell is `# (See notes: <id>)`, which renders as a heading rather than a
+comment in a markdown cell, so supporting them requires a per-cell-type
+reference format.
 
 **There is no `scrub-note` cell tag.** Unlike `scrub-clear` and `scrub-omit`,
 the option is source-only: a note needs an id, and a Jupyter metadata tag has
@@ -432,6 +486,14 @@ added:
 ```
 
 This creates a clear link from the exercise notebook to the notes file.
+
+**Note ids must be unique within a notebook.** Reusing one is an error that
+names both cells involved, for example:
+
+```text
+Cell 2: Duplicate note id 'ex-1'; already used by cell 0. Note ids must be
+unique within a notebook
+```
 
 **Behavior by command:**
 
