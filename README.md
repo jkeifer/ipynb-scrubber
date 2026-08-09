@@ -106,6 +106,14 @@ the current directory and moving upward:
 
 This means you can run the command from any subdirectory of your project.
 
+A `pyproject.toml` encountered during the search that cannot be read or
+parsed as TOML stops the search with an error, rather than being skipped.
+Since the file cannot be parsed, there is no way to know whether it would
+have contained a `[tool.ipynb-scrubber]` section, so neither "keep
+searching" nor "no config found" would be a trustworthy result. A readable
+`pyproject.toml` with no `[tool.ipynb-scrubber]` section is unaffected and
+is skipped as before.
+
 #### Configuration File Formats
 
 **Option 1: Standalone `.ipynb-scrubber.toml`**

@@ -63,12 +63,20 @@ def find_config_file(start_dir: Path | None = None) -> Path | None:
             try:
                 with pyproject.open('rb') as f:
                     data = tomllib.load(f)
-                # Check if it has our config section
-                if 'tool' in data and 'ipynb-scrubber' in data['tool']:
-                    return pyproject
-            except (OSError, tomllib.TOMLDecodeError):
-                # Invalid TOML or read error, skip this file
-                pass
+            except (OSError, tomllib.TOMLDecodeError) as e:
+                # A pyproject.toml we can't read or parse makes the search
+                # unsound: we cannot tell whether it would have carried a
+                # [tool.ipynb-scrubber] section, so neither "use this other
+                # config" nor "no config found" can be trusted. Fail loudly
+                # instead of silently searching past it.
+                raise ScrubberError(
+                    f'{pyproject} exists but could not be read as TOML: {e}. '
+                    'Fix or remove this file so config discovery can '
+                    'determine whether it defines [tool.ipynb-scrubber].',
+                ) from e
+            # Check if it has our config section
+            if 'tool' in data and 'ipynb-scrubber' in data['tool']:
+                return pyproject
 
         # Move up one directory
         parent = current.parent

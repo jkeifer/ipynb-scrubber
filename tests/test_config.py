@@ -137,16 +137,33 @@ def test_from_file_unreadable_path_errors(tmp_path):
         ProjectConfig.from_file(a_directory)
 
 
-def test_find_config_file_skips_unreadable_pyproject_toml(tmp_path):
-    """A broken pyproject.toml during upward search is skipped, not fatal."""
+def test_find_config_file_errors_on_unparsable_pyproject_toml(tmp_path):
+    """A broken pyproject.toml during upward search is fatal, not skipped.
+
+    We can't know whether the broken file would have contained a
+    [tool.ipynb-scrubber] section, so neither "keep searching" nor "use a
+    config found higher up" is a sound conclusion.
+    """
     (tmp_path / 'pyproject.toml').write_text('not valid toml [[[')
-    assert find_config_file(tmp_path) is None
+    with pytest.raises(ScrubberError, match=r'pyproject\.toml.*could not be read'):
+        find_config_file(tmp_path)
 
 
-def test_find_config_file_finds_valid_pyproject_after_skipping_broken_one(tmp_path):
+def test_find_config_file_errors_on_unreadable_pyproject_toml(tmp_path):
+    """A pyproject.toml that exists but can't be opened (e.g. a directory)."""
+    (tmp_path / 'pyproject.toml').mkdir()
+    with pytest.raises(ScrubberError, match=r'pyproject\.toml.*could not be read'):
+        find_config_file(tmp_path)
+
+
+def test_find_config_file_skips_pyproject_toml_without_our_section(tmp_path):
+    """A readable pyproject.toml with no [tool.ipynb-scrubber] is legitimate
+
+    and the search must keep going upward to find a real config.
+    """
     subdir = tmp_path / 'sub'
     subdir.mkdir()
-    (subdir / 'pyproject.toml').write_text('not valid toml [[[')
+    (subdir / 'pyproject.toml').write_text('[tool.other]\nkey = "value"\n')
     (tmp_path / 'pyproject.toml').write_text(
         '[tool.ipynb-scrubber]\n[[tool.ipynb-scrubber.files]]\n'
         'input = "a.ipynb"\noutput = "b.ipynb"\n',
