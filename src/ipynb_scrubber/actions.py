@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 from .config import ScrubbingOptions
 from .exceptions import ProcessingError
+from .notebook import Cell, get_cell_source
 from .options import Option, parse_cell_options
-from .processor import Cell, get_cell_source
 
 
 @dataclass(frozen=True)
