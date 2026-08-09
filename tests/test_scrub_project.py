@@ -779,6 +779,33 @@ notes-file = "{notes_file}"
     assert 'custom_solution' in notes_content
 
 
+def test_unwritable_output_reports_once_without_traceback(tmp_path, scrub_project):
+    notebook = tmp_path / 'in.ipynb'
+    notebook.write_text(
+        json.dumps(
+            {
+                'cells': [{'cell_type': 'code', 'metadata': {}, 'source': 'x = 1'}],
+                'metadata': {},
+                'nbformat': 4,
+                'nbformat_minor': 4,
+            },
+        ),
+    )
+    locked = tmp_path / 'locked'
+    locked.mkdir()
+    locked.chmod(0o500)
+    config = tmp_path / '.ipynb-scrubber.toml'
+    config.write_text(
+        f'[[files]]\ninput = "{notebook}"\noutput = "{locked}/sub/out.ipynb"\n',
+    )
+
+    result = scrub_project('--config-file', str(config))
+
+    assert result.returncode == 1
+    assert 'Traceback' not in result.stderr
+    assert result.stderr.count('Permission denied') == 1
+
+
 def test_multiline_clear_text_toml(
     tmp_path: Path,
     sample_notebook: Notebook,

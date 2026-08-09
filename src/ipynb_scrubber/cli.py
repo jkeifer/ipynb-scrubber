@@ -4,37 +4,27 @@ import sys
 import warnings
 
 from collections.abc import Sequence
-from typing import ClassVar, NoReturn, Protocol
 from pathlib import Path
+from typing import ClassVar, NoReturn, Protocol
 
-from .config import ProjectConfig, ScrubbingOptions
+from .config import FileEntry, ProjectConfig, ScrubbingOptions
 from .exceptions import ScrubberError
 from .processor import process_notebook, write_notes_file
 
 
 def printe(*args, **kwargs) -> None:
-    print(*args, file=sys.stderr, **kwargs)
+    print(*args, file=sys.stderr, **kwargs)  # noqa: T201
 
 
 class Command(Protocol):
     help: ClassVar[str] = ''
 
     @property
-    def name(self) -> str:
-        return self.__class__.__name__.lower()
+    def name(self) -> str: ...
 
-    def set_args(self, parser: argparse.ArgumentParser) -> None:
-        pass
+    def set_args(self, parser: argparse.ArgumentParser) -> None: ...
 
-    def process_args(
-        self,
-        parser: argparse.ArgumentParser,
-        args: argparse.Namespace,
-    ) -> None:
-        pass
-
-    def __call__(self, args: argparse.Namespace) -> int:
-        raise NotImplementedError
+    def __call__(self, args: argparse.Namespace) -> int: ...
 
 
 class CLI:
@@ -61,8 +51,7 @@ class CLI:
     def add_command(self, command: Command) -> None:
         parser = self._subparsers.add_parser(
             command.name,
-            help=getattr(command, 'help', None),
-            aliases=getattr(command, 'aliases', []),
+            help=command.help,
         )
         command.set_args(parser)
         parser.set_defaults(_cmd=command)
@@ -78,11 +67,7 @@ class CLI:
             self.parser.print_help()
             sys.exit(2)
 
-        args._cmd.process_args(self.parser, args)
         return args
-
-    def process_args(self, args: argparse.Namespace) -> None:
-        pass
 
     def __call__(self, argv: Sequence[str] | None = None) -> NoReturn:
         args = self._process_args(argv)
@@ -130,13 +115,6 @@ class ScrubNotebook:
             help='Path to write notes file (for cells with note tag)',
         )
 
-    def process_args(
-        self,
-        parser: argparse.ArgumentParser,
-        args: argparse.Namespace,
-    ) -> None:
-        pass
-
     def __call__(self, args: argparse.Namespace) -> int:
         try:
             try:
@@ -176,11 +154,10 @@ class ScrubNotebook:
                 raise ScrubberError(f'Error writing output: {e}') from e
 
         except ScrubberError as e:
-            print(f'Error: {e}', file=sys.stderr)  # noqa: T201
+            printe(f'Error: {e}')
             sys.exit(1)
         except Exception as e:
-            print(f'Unexpected error: {e}', file=sys.stderr)
-            # ruff: noqa T202
+            printe(f'Unexpected error: {e}')
             raise
         return 0
 
@@ -204,81 +181,60 @@ class ScrubProject:
             ),
         )
 
-    def process_args(
+    def _process_file(
         self,
-        parser: argparse.ArgumentParser,
-        args: argparse.Namespace,
+        file_entry: FileEntry,
+        global_options: ScrubbingOptions,
     ) -> None:
-        pass
+        options = file_entry.get_options(global_options)
+
+        if not file_entry.input.exists():
+            raise ScrubberError(f'Input file not found: {file_entry.input}')
+
+        try:
+            with file_entry.input.open() as f:
+                notebook = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ScrubberError(f'Invalid JSON in {file_entry.input}: {e}') from e
+        except OSError as e:
+            raise ScrubberError(f'Error reading {file_entry.input}: {e}') from e
+
+        processed_notebook, notes_dict = process_notebook(notebook, options)
+
+        if notes_dict:
+            if file_entry.notes_file is None:
+                raise ScrubberError(
+                    f'Found {len(notes_dict)} cell(s) with note tag '
+                    f'"{options.note_tag}", but no notes-file specified in config',
+                )
+            write_notes_file(notes_dict, file_entry.notes_file)
+
+        try:
+            file_entry.output.parent.mkdir(parents=True, exist_ok=True)
+            with file_entry.output.open('w') as f:
+                json.dump(processed_notebook, f, indent=1)
+        except OSError as e:
+            raise ScrubberError(f'Error writing {file_entry.output}: {e}') from e
 
     def __call__(self, args: argparse.Namespace) -> int:
         try:
-            # Load project configuration
             if args.config_file is None:
                 config = ProjectConfig.discover()
             else:
                 config = ProjectConfig.from_file(args.config_file)
-
-            # Process each file in the configuration
-            for file_entry in config.files:
-                try:
-                    # Get merged options for this file
-                    options = file_entry.get_options(config.global_options)
-
-                    # Read input notebook
-                    if not file_entry.input.exists():
-                        raise ScrubberError(
-                            f'Input file not found: {file_entry.input}',
-                        )
-
-                    try:
-                        with file_entry.input.open() as f:
-                            notebook = json.load(f)
-                    except json.JSONDecodeError as e:
-                        raise ScrubberError(
-                            f'Invalid JSON in {file_entry.input}: {e}',
-                        ) from e
-
-                    # Process the notebook
-                    processed_notebook, notes_dict = process_notebook(notebook, options)
-
-                    # Handle notes (error mode)
-                    if notes_dict:
-                        if file_entry.notes_file is None:
-                            printe(
-                                f'✗ Error processing {file_entry.input}: '
-                                f'Found {len(notes_dict)} cell(s) with note tag '
-                                f'"{options.note_tag}", but no notes-file specified '
-                                'in config',
-                            )
-                            return 1
-                        # Write notes file
-                        write_notes_file(notes_dict, file_entry.notes_file)
-
-                    # Ensure output directory exists
-                    file_entry.output.parent.mkdir(parents=True, exist_ok=True)
-
-                    # Write output notebook
-                    with file_entry.output.open('w') as f:
-                        json.dump(processed_notebook, f, indent=1)
-
-                    printe(f'✓ Processed: {file_entry.input} → {file_entry.output}')
-
-                except ScrubberError as e:
-                    printe(f'✗ Error processing {file_entry.input}: {e}')
-                    return 1
-                except Exception as e:
-                    printe(f'✗ Unexpected error processing {file_entry.input}: {e}')
-                    raise
-
-            return 0
-
         except ScrubberError as e:
             printe(f'Error: {e}')
             return 1
-        except Exception as e:
-            printe(f'Unexpected error: {e}')
-            raise
+
+        for file_entry in config.files:
+            try:
+                self._process_file(file_entry, config.global_options)
+            except ScrubberError as e:
+                printe(f'✗ Error processing {file_entry.input}: {e}')
+                return 1
+            printe(f'✓ Processed: {file_entry.input} → {file_entry.output}')
+
+        return 0
 
 
 def _cli() -> CLI:
