@@ -8,13 +8,21 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
+import yaml
+
 from .exceptions import ScrubberError
 
 #: What an option name may look like. A name is written as a YAML key in a
-#: cell's option header, so it has to survive that round trip as itself: no
-#: leading indicator character, no whitespace, nothing YAML would quote or
-#: resolve to another type.
+#: cell's option header, so it has to survive that round trip as itself, and
+#: this is half of that: no leading indicator character, no whitespace, nothing
+#: YAML would have to quote to carry as a bare key.
 TAG_NAME = re.compile(r'[A-Za-z][A-Za-z0-9_-]*')
+
+#: The other half: what YAML tags a scalar it reads as text, and so what a name
+#: has to come back tagged to arrive off a header as the name it was written
+#: as. Asked of YAML's own resolver rather than checked against a list of words
+#: kept here, so the answer stays the one PyYAML gives when it reads a header.
+_STRING_TAG = 'tag:yaml.org,2002:str'
 
 
 def reject_unknown_keys(
@@ -202,7 +210,15 @@ class ScrubbingOptions:
 
         A tag is written as a YAML key in a cell's option header and as a
         metadata tag, so it has to be something YAML reads back as the same
-        plain string and a reader can pick out of a comment.
+        plain string and a reader can pick out of a comment. The pattern is
+        not enough for that on its own: YAML reads a handful of plain words as
+        another type — ``yes`` and ``no`` are booleans, ``null`` is nothing at
+        all — in any capitalisation its resolver accepts, so a tag spelled as
+        one is written into a header where an option goes but arrives as a
+        bool or None. Nothing looking the option up by name would find it and
+        the cell would ship unscrubbed without a word; for ``omit-tag`` that
+        means shipping the solution. Settling both here is what lets
+        everything downstream take a configured name at its word.
 
         The three tags are also matched as a set, so two spellings that are
         equal collapse into one and whichever behaviour loses the precedence
@@ -222,11 +238,18 @@ class ScrubbingOptions:
             'note-tag': self.note_tag,
         }
 
+        resolve = yaml.resolver.Resolver().resolve
         for key, name in named.items():
             if not TAG_NAME.fullmatch(name):
                 raise ScrubberError(
                     f'{key} must start with a letter and contain only letters, '
                     f'digits, hyphens and underscores, but got {name!r}',
+                )
+            if resolve(yaml.ScalarNode, name, (True, False)) != _STRING_TAG:
+                raise ScrubberError(
+                    f'{key} must be a name YAML reads back as text, but got '
+                    f'{name!r}, which YAML resolves to another type. Words like '
+                    'yes, no, on, off, true, false and null are not names',
                 )
 
         tags = tuple(named.values())

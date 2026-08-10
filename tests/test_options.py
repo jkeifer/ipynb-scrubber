@@ -318,21 +318,6 @@ def test_a_non_text_name_beside_an_option_is_left_alone() -> None:
     }
 
 
-def test_an_option_name_yaml_does_not_read_as_text_raises() -> None:
-    """A tag configured as 'yes' is a key YAML resolves to a boolean.
-
-    The option is written where an option goes but arrives under a name no
-    lookup finds, so it would silently do nothing. Quoting it, which is what
-    the message asks for, is what makes it a name again.
-    """
-    yes = (Option('yes', takes_text=True),)
-    with pytest.raises(ProcessingError, match=r"Option 'yes' is not read as text"):
-        parse_cell_options('code', '#| yes: hello\nprint("x")', yes)
-    assert parse_cell_options('code', '#| "yes": hello\nprint("x")', yes).options == {
-        'yes': 'hello',
-    }
-
-
 def test_tab_in_the_indentation_raises_a_targeted_error() -> None:
     source = '#| scrub-clear: |\n#|\tdef add(a, b):\n#|\t    pass'
     with pytest.raises(

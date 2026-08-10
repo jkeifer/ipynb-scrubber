@@ -96,6 +96,18 @@ clear-tag must start with a letter and contain only letters, digits, hyphens
 and underscores, but got 'my tag'
 ```
 
+A name YAML reads back as something other than text is rejected for the same
+reason, even though the pattern allows it. `yes`, `no`, `on`, `off`, `true`,
+`false` and `null` — in any capitalisation YAML accepts — are a boolean or
+nothing at all when they appear as a key, so a cell marked with one would
+arrive under a key no lookup by name finds and would ship unscrubbed:
+
+```text
+omit-tag must be a name YAML reads back as text, but got 'no', which YAML
+resolves to another type. Words like yes, no, on, off, true, false and null
+are not names
+```
+
 The three names must also differ from one another. Pointing two of them at the
 same string would make a marked cell ambiguous, so it is rejected:
 

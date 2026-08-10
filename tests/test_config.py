@@ -256,8 +256,24 @@ def test_unusable_tag_names_are_rejected(name):
         ScrubbingOptions(omit_tag=name)
 
 
-def test_a_usable_tag_name_is_accepted():
-    assert ScrubbingOptions(omit_tag='Drop_me-2').omit_tag == 'Drop_me-2'
+@pytest.mark.parametrize(
+    'name',
+    ['yes', 'no', 'on', 'off', 'true', 'false', 'null', 'Yes', 'OFF', 'NULL'],
+)
+def test_tag_names_yaml_does_not_read_as_text_are_rejected(name):
+    """These spell a YAML key that comes back as a bool or None, not a name.
+
+    The option would be written into a header where an option goes and arrive
+    under a key no lookup by name finds, so the cell would ship unscrubbed.
+    """
+    with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
+        ScrubbingOptions(omit_tag=name)
+
+
+@pytest.mark.parametrize('name', ['scrub-omit', 'y', 'n', 'note', 'yEs', 'Drop_me-2'])
+def test_ordinary_tag_names_are_accepted(name):
+    """'y' and 'n' are not booleans to PyYAML's resolver, only 'yes'/'no' are."""
+    assert ScrubbingOptions(omit_tag=name).omit_tag == name
 
 
 def test_an_unusable_tag_name_is_rejected_from_dict():
@@ -270,6 +286,20 @@ def test_file_override_with_an_unusable_tag_name_is_rejected():
     with pytest.raises(ScrubberError, match='must start with a letter'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'has space'},
+            ScrubbingOptions(),
+        )
+
+
+def test_a_tag_name_yaml_reads_as_a_bool_is_rejected_from_dict():
+    with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
+        ScrubbingOptions.from_dict({'omit-tag': 'no'})
+
+
+def test_file_override_with_a_tag_name_yaml_reads_as_a_bool_is_rejected():
+    """The merge goes through replace(), so __post_init__ catches it."""
+    with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'null'},
             ScrubbingOptions(),
         )
 
