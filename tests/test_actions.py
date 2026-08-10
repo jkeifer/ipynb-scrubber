@@ -3,12 +3,9 @@ import pytest
 from ipynb_scrubber.actions import Clear, Keep, Note, Omit, apply, decide
 from ipynb_scrubber.config import ScrubbingOptions
 from ipynb_scrubber.exceptions import ProcessingError
+from tests.builders import cell
 
 OPTS = ScrubbingOptions()
-
-
-def cell(source: str, cell_type: str = 'code', **metadata) -> dict:
-    return {'cell_type': cell_type, 'source': source, 'metadata': metadata}
 
 
 def test_plain_cell_is_kept():
@@ -171,7 +168,8 @@ def test_note_mapping_rejects_text_that_is_not_a_string():
         decide(cell(source), OPTS)
 
 
-def test_apply_strips_outputs_and_execution_count():
+def test_apply_empties_a_code_cells_outputs_and_execution_count():
+    """Emptied, not removed: nbformat requires both keys on every code cell."""
     target = {
         'cell_type': 'code',
         'source': 'x = 1',
@@ -179,9 +177,34 @@ def test_apply_strips_outputs_and_execution_count():
         'execution_count': 3,
     }
     result = apply(target, Keep())
+    assert result['outputs'] == []
+    assert result['execution_count'] is None
+    assert result['source'] == 'x = 1'
+
+
+@pytest.mark.parametrize('cell_type', ['markdown', 'raw'])
+def test_apply_removes_run_results_from_a_non_code_cell(cell_type):
+    """Only a code cell may carry them, so elsewhere they are dropped outright."""
+    target = {
+        'cell_type': cell_type,
+        'source': 'text',
+        'outputs': [1],
+        'execution_count': 3,
+    }
+    result = apply(target, Keep())
     assert 'outputs' not in result
     assert 'execution_count' not in result
-    assert result['source'] == 'x = 1'
+
+
+def test_apply_keeps_a_list_source_a_list():
+    """A rewritten cell keeps the source shape it arrived in, as Jupyter writes it."""
+    target = {'cell_type': 'code', 'source': ['x = 1\n', 'y = 2'], 'metadata': {}}
+    assert apply(target, Clear('a\nb'))['source'] == ['a\n', 'b']
+
+
+def test_apply_keeps_a_string_source_a_string():
+    target = {'cell_type': 'code', 'source': 'x = 1', 'metadata': {}}
+    assert apply(target, Clear('a\nb'))['source'] == 'a\nb'
 
 
 def test_apply_leaves_the_input_cell_alone():

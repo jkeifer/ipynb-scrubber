@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ipynb_scrubber import project
+from ipynb_scrubber import project, staging
 from ipynb_scrubber.cli import ScrubProject
 from ipynb_scrubber.config import FileEntry
 from ipynb_scrubber.exceptions import ScrubberError
@@ -423,7 +423,7 @@ output = "{tmp_path / 'output.ipynb'}"
 
     assert result.returncode == 1
     assert 'note tag' in result.stderr
-    assert 'no notes-file specified' in result.stderr
+    assert 'Set notes-file for this entry in the config.' in result.stderr
 
 
 def test_unwritable_output_reports_once_without_traceback(tmp_path, scrub_project):
@@ -644,19 +644,21 @@ output = "{out_dir / 'second.ipynb'}"
     assert [p.name for p in out_dir.iterdir()] == ['first.ipynb']
 
 
-def test_scrub_file_writes_one_entry(tmp_path: Path, sample_notebook, note_cell):
-    """The single-entry API writes both outputs and leaves nothing staged."""
+def test_a_single_entry_writes_both_outputs(tmp_path: Path, sample_notebook, note_cell):
+    """One entry is just a batch of one, and still writes notebook and notes."""
     sample_notebook['cells'].append(note_cell)
     input_path = tmp_path / 'input.ipynb'
     write(input_path, sample_notebook)
     out_dir = tmp_path / 'out'
 
-    project.scrub_file(
-        FileEntry(
-            input=input_path,
-            output=out_dir / 'out.ipynb',
-            notes_file=out_dir / 'notes.md',
-        ),
+    project.scrub_files(
+        [
+            FileEntry(
+                input=input_path,
+                output=out_dir / 'out.ipynb',
+                notes_file=out_dir / 'notes.md',
+            ),
+        ],
     )
 
     assert sorted(p.name for p in out_dir.iterdir()) == ['notes.md', 'out.ipynb']
@@ -675,10 +677,14 @@ def test_commit_failure_removes_staged_files(
     def boom(staged):
         raise OSError('rename failed')
 
-    monkeypatch.setattr(project, 'commit', boom)
+    # The rename itself, so commit_all's cleanup still runs -- that cleanup is
+    # exactly what this test is checking.
+    monkeypatch.setattr(staging, 'commit', boom)
 
     with pytest.raises(ScrubberError, match='Error writing output'):
-        project.scrub_file(FileEntry(input=input_path, output=out_dir / 'out.ipynb'))
+        project.scrub_files(
+            [FileEntry(input=input_path, output=out_dir / 'out.ipynb')],
+        )
 
     assert list(out_dir.iterdir()) == []
 
@@ -702,7 +708,7 @@ output = "{tmp_path / 'output.ipynb'}"
     def boom(*args, **kwargs):
         raise MemoryError('out of memory')
 
-    monkeypatch.setattr(project.json, 'dump', boom)
+    monkeypatch.setattr(project, 'dumps_notebook', boom)
 
     with pytest.raises(MemoryError):
         ScrubProject()(argparse.Namespace(config_file=config))
