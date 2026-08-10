@@ -446,6 +446,25 @@ def test_an_option_name_yaml_cannot_use_as_a_key_raises() -> None:
         options('code', '#| ? [scrub-omit, other]\n#| : x')
 
 
+@pytest.mark.parametrize(
+    'source',
+    [
+        '#| ? [a, b]\n#| : c',
+        '#| foo: !!weird bar',
+    ],
+)
+def test_a_header_yaml_parses_but_cannot_build_raises(source: str) -> None:
+    """Regression: these named no option, so ownership used to swallow them.
+
+    YAML gives up on some headers only once it starts turning the parsed text
+    into values — a key nothing can hash, a tag nothing can build. That is a
+    malformed header like any other, and it is reported whether or not it
+    names one of this tool's options.
+    """
+    with pytest.raises(ProcessingError, match='Invalid cell option header'):
+        options('code', source)
+
+
 def test_a_non_text_name_the_tool_does_not_own_is_left_alone() -> None:
     """The header names no scrubber option, so its keys are not this tool's."""
     assert options('code', '#| 12: hello') == {}
