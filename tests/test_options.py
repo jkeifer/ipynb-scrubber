@@ -306,9 +306,31 @@ def test_a_bare_name_is_never_silently_dropped() -> None:
             options('code', source)
 
 
-def test_non_text_option_name_raises() -> None:
-    with pytest.raises(ProcessingError, match='option names must be text'):
-        options('code', '#| scrub-clear: hello\n#| 12: hello')
+def test_a_non_text_name_beside_an_option_is_left_alone() -> None:
+    """'12' is nobody's option here, so it is read as YAML reads it.
+
+    The header carries one of this tool's options too, which does not make its
+    neighbour's keys this tool's to complain about.
+    """
+    assert options('code', '#| scrub-clear: hello\n#| 12: hello') == {
+        'scrub-clear': 'hello',
+        12: 'hello',
+    }
+
+
+def test_an_option_name_yaml_does_not_read_as_text_raises() -> None:
+    """A tag configured as 'yes' is a key YAML resolves to a boolean.
+
+    The option is written where an option goes but arrives under a name no
+    lookup finds, so it would silently do nothing. Quoting it, which is what
+    the message asks for, is what makes it a name again.
+    """
+    yes = (Option('yes', takes_text=True),)
+    with pytest.raises(ProcessingError, match=r"Option 'yes' is not read as text"):
+        parse_cell_options('code', '#| yes: hello\nprint("x")', yes)
+    assert parse_cell_options('code', '#| "yes": hello\nprint("x")', yes).options == {
+        'yes': 'hello',
+    }
 
 
 def test_tab_in_the_indentation_raises_a_targeted_error() -> None:
@@ -440,6 +462,18 @@ def test_a_non_mapping_header_the_tool_does_not_own_yields_no_options() -> None:
     assert options('code', '#| - one\n#| - two') == {}
 
 
+def test_a_non_mapping_header_is_claimed_wherever_the_name_is_written() -> None:
+    """A header this shape has no keys to read ownership off, so all of it counts.
+
+    An option written inside a list is still an option somebody wrote, and
+    passing over it would leave the cell scrub-omit was meant to remove in the
+    output. A list of the same shape naming nothing is somebody else's.
+    """
+    with pytest.raises(ProcessingError, match='must be a mapping'):
+        options('code', '#| - scrub-omit: x\n#| - two')
+    assert options('code', '#| - one: x\n#| - two') == {}
+
+
 def test_an_option_name_yaml_cannot_use_as_a_key_raises() -> None:
     """A sequence is well-formed YAML but cannot name an option."""
     with pytest.raises(ProcessingError, match='Invalid cell option header'):
@@ -467,17 +501,49 @@ def test_a_header_yaml_parses_but_cannot_build_raises(source: str) -> None:
 
 def test_a_non_text_name_the_tool_does_not_own_is_left_alone() -> None:
     """The header names no scrubber option, so its keys are not this tool's."""
-    assert options('code', '#| 12: hello') == {}
+    assert options('code', '#| 12: hello') == {12: 'hello'}
 
 
 def test_a_repeated_name_the_tool_does_not_own_is_left_alone() -> None:
     """Whether a neighbour may repeat its own option is not this tool's call.
 
-    The header yields nothing rather than failing the run. That it yields
-    nothing at all, rather than the surviving value, does not matter: this tool
-    never reads a name it does not define.
+    YAML keeps the last of the two, and that is what the header yields: this
+    tool never reads a name it does not define, so it has nothing to lose to
+    the repeat and nothing to say about it.
     """
-    assert options('code', '#| fig-cap: a\n#| fig-cap: b\nprint("x")') == {}
+    assert options('code', '#| fig-cap: a\n#| fig-cap: b\nprint("x")') == {
+        'fig-cap': 'b',
+    }
+
+
+def test_a_repeated_foreign_name_beside_an_option_is_left_alone() -> None:
+    """Regression: owning one key in a header did not make its neighbours ours.
+
+    Ownership is decided per entry, so a repeat under somebody else's name does
+    not turn into a refusal to scrub the cell just because this tool also has
+    an option in the same header.
+    """
+    source = '#| scrub-clear: hi\n#| fig-cap: a\n#| fig-cap: b\nprint("x")'
+    assert options('code', source) == {'scrub-clear': 'hi', 'fig-cap': 'b'}
+
+
+def test_a_repeat_under_a_foreign_name_beside_an_option_is_left_alone() -> None:
+    """Everything under a neighbour's name is the neighbour's, nesting and all."""
+    source = '#| scrub-clear: hi\n#| opts:\n#|   a: 1\n#|   a: 2\nprint("x")'
+    assert options('code', source) == {'scrub-clear': 'hi', 'opts': {'a': 2}}
+
+
+def test_a_repeated_option_beside_a_foreign_name_still_raises() -> None:
+    """A repeat of this tool's own name loses an instruction it was given."""
+    source = '#| fig-cap: a\n#| scrub-clear: first\n#| scrub-clear: second'
+    with pytest.raises(ProcessingError, match=r"Duplicate option 'scrub-clear'"):
+        options('code', source)
+
+
+def test_a_comment_eating_a_foreign_value_beside_an_option_is_left_alone() -> None:
+    """A neighbour's quoting is the neighbour's business, header shared or not."""
+    source = '#| scrub-clear: hi\n#| fig-cap: x # note\nprint("x")'
+    assert options('code', source) == {'scrub-clear': 'hi', 'fig-cap': 'x'}
 
 
 def test_a_longer_name_containing_a_scrubber_name_is_not_owned() -> None:
