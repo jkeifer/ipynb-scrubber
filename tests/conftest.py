@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from ipynb_scrubber.notebook import Notebook
+from tests import builders
 
 
 @pytest.fixture(scope='session')
@@ -39,34 +39,23 @@ def scrub_project(scrubber):
     return functools.partial(scrubber, 'scrub-project')
 
 
+#: The builders are plain functions in builders.py; these fixtures only expose
+#: them to the tests already written to request them as parameters.
 @pytest.fixture
 def make_notebook():
-    """Build a notebook from cell dicts, filling in the boilerplate."""
-
-    def inner(*cells: dict, metadata: dict | None = None) -> Notebook:
-        return {
-            'cells': [{'metadata': {}, **cell} for cell in cells],
-            'metadata': {} if metadata is None else metadata,
-            'nbformat': 4,
-            'nbformat_minor': 4,
-        }
-
-    return inner
+    return builders.make_notebook
 
 
 @pytest.fixture
 def code():
-    """Build a code cell."""
-    return lambda source, **kw: {'cell_type': 'code', 'source': source, **kw}
+    return builders.code
 
 
 @pytest.fixture
 def markdown():
-    """Build a markdown cell."""
-    return lambda source, **kw: {'cell_type': 'markdown', 'source': source, **kw}
+    return builders.markdown
 
 
 @pytest.fixture
 def raw():
-    """Build a raw cell."""
-    return lambda source, **kw: {'cell_type': 'raw', 'source': source, **kw}
+    return builders.raw
