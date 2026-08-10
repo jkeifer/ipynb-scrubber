@@ -22,13 +22,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
-    from typing import IO
+    from collections.abc import Iterable
 
 #: Mode given to a staged file whose target does not already exist. A
 #: temporary file is created readable only by its owner, which is wrong for an
 #: ordinary output file.
 DEFAULT_FILE_MODE = 0o644
+
+#: Everything this tool writes is UTF-8, never the locale's encoding. A notebook
+#: is UTF-8 by specification and notes are extracted from one, so the locale of
+#: whoever happens to run the tool has no business deciding how they are stored.
+ENCODING = 'utf-8'
 
 
 @dataclass(frozen=True)
@@ -39,7 +43,7 @@ class StagedFile:
     final: Path
 
 
-def stage(final: Path, write_content: Callable[[IO[str]], None]) -> StagedFile:
+def stage(final: Path, content: str) -> StagedFile:
     """Write the content destined for ``final`` to a temporary file beside it.
 
     The temporary file is created in ``final``'s own directory, which is
@@ -47,11 +51,12 @@ def stage(final: Path, write_content: Callable[[IO[str]], None]) -> StagedFile:
     with an atomic rename. Nothing at ``final`` is touched.
 
     The staged file takes ``final``'s mode if ``final`` exists, and
-    :data:`DEFAULT_FILE_MODE` otherwise.
+    :data:`DEFAULT_FILE_MODE` otherwise. It is written as :data:`ENCODING` with
+    newline translation off, so the bytes on disk are the bytes given here.
 
     Args:
         final: The path the content is destined for.
-        write_content: Callable that writes the whole content to a text stream.
+        content: The whole content to write.
 
     Returns:
         The staged file, to hand to :func:`commit` or :func:`discard`.
@@ -59,8 +64,6 @@ def stage(final: Path, write_content: Callable[[IO[str]], None]) -> StagedFile:
     Raises:
         OSError: If the directory or the temporary file cannot be created or
             written.
-        Exception: Whatever ``write_content`` raises, after removing the
-            temporary file.
     """
     final.parent.mkdir(parents=True, exist_ok=True)
 
@@ -68,13 +71,15 @@ def stage(final: Path, write_content: Callable[[IO[str]], None]) -> StagedFile:
     try:
         with tempfile.NamedTemporaryFile(
             mode='w',
+            encoding=ENCODING,
+            newline='',
             dir=final.parent,
             prefix=f'.{final.name}.',
             suffix='.tmp',
             delete=False,
         ) as f:
             temp = Path(f.name)
-            write_content(f)
+            f.write(content)
         temp.chmod(
             final.stat().st_mode & 0o777 if final.exists() else DEFAULT_FILE_MODE,
         )
@@ -87,12 +92,10 @@ def stage(final: Path, write_content: Callable[[IO[str]], None]) -> StagedFile:
 
 
 def commit(staged: Iterable[StagedFile]) -> None:
-    """Move every staged file onto its target path.
+    """Move every staged file onto its target path, with the guarantees above.
 
-    Each move is a single rename, so no target is ever observed
-    partially written. The moves happen one after another rather than as one
-    transaction: if one fails, or the process dies partway through, the targets
-    moved so far are updated and the rest are not.
+    Prefer :func:`commit_all`, which also cleans up after a failure. This is the
+    rename half on its own.
 
     Args:
         staged: The staged files to commit, in the order they should appear.
@@ -120,25 +123,34 @@ def discard(staged: Iterable[StagedFile]) -> None:
             item.temp.unlink(missing_ok=True)
 
 
-def write_atomic(final: Path, write_content: Callable[[IO[str]], None]) -> None:
-    """Write ``final`` in its entirety or not at all.
+def commit_all(staged: Iterable[StagedFile]) -> None:
+    """The whole commit protocol: rename everything, then sweep up.
 
-    Stages the content beside ``final`` and commits it, removing the temporary
-    file if anything goes wrong.
+    Sweeping is unconditional because a committed file has already been moved,
+    so a successful commit leaves nothing to remove and a failed one leaves
+    exactly what needs removing.
+
+    Args:
+        staged: The staged files to commit, in the order they should appear.
+
+    Raises:
+        OSError: If a staged file cannot be moved onto its target.
+    """
+    items = list(staged)
+    try:
+        commit(items)
+    finally:
+        discard(items)
+
+
+def write_atomic(final: Path, content: str) -> None:
+    """Write ``final`` in its entirety or not at all.
 
     Args:
         final: The path to write.
-        write_content: Callable that writes the whole content to a text stream.
+        content: The whole content to write.
 
     Raises:
         OSError: If the content cannot be written or moved into place.
-        Exception: Whatever ``write_content`` raises.
     """
-    item = stage(final, write_content)
-    try:
-        commit([item])
-    finally:
-        # A committed file has been moved, so there is nothing left to remove
-        # on the way out of a successful commit. Sweeping unconditionally is
-        # what cleans up after one that failed or was interrupted.
-        discard([item])
+    commit_all([stage(final, content)])

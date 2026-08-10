@@ -1,6 +1,12 @@
+import json
+
 from typing import Any, Required, TypedDict, cast
 
 from .exceptions import InvalidNotebookError
+
+#: The indentation Jupyter itself writes. Matching it keeps a scrubbed notebook
+#: diffable against one that has been opened and saved.
+NOTEBOOK_INDENT = 1
 
 
 class Cell(TypedDict, total=False):
@@ -50,6 +56,51 @@ def get_cell_source(cell: Cell) -> str:
     if isinstance(source, list):
         source = ''.join(source)
     return source
+
+
+def to_cell_source(cell: Cell, text: str) -> str | list[str]:
+    """``text``, in the shape ``cell``'s existing source is written in.
+
+    nbformat lets a cell's source be one string or a list of lines, and Jupyter
+    writes the list form. A cell that arrived as a list is handed back as one,
+    so a rewritten cell does not collapse into a single very long line while its
+    untouched neighbours stay line-per-line. That would make the rewrite
+    unreadable in a diff, and would be undone the moment anyone opened the
+    notebook and saved it.
+    """
+    if isinstance(cell.get('source'), list):
+        return text.splitlines(keepends=True)
+    return text
+
+
+def loads_notebook(data: bytes) -> Any:
+    """Parse notebook JSON from raw bytes.
+
+    Bytes rather than text, on purpose. A notebook is UTF-8 by specification,
+    and JSON is self-describing besides: :func:`json.loads` reads the encoding
+    off the leading bytes. Decoding the file here instead would mean choosing an
+    encoding, and the only one available by default is the locale's, which turns
+    a notebook containing an accent into a crash on any machine whose locale is
+    not UTF-8.
+
+    Raises:
+        UnicodeDecodeError: If ``data`` is not valid in the encoding it declares.
+        json.JSONDecodeError: If it is not valid JSON.
+    """
+    return json.loads(data)
+
+
+def dumps_notebook(notebook: Notebook) -> str:
+    """Serialize a notebook the way Jupyter writes one.
+
+    ``ensure_ascii`` is off because Jupyter's own writer leaves it off. Escaping
+    every non-ASCII character to ``\\uXXXX`` round-trips correctly, so nothing is
+    lost, but it turns every notebook holding an accent or an emoji into an
+    unreadable diff against the version Jupyter would have written. The trailing
+    newline is there for the same reason: a file without one is a spurious diff
+    hunk for anything that appends to it.
+    """
+    return json.dumps(notebook, indent=NOTEBOOK_INDENT, ensure_ascii=False) + '\n'
 
 
 def _validate_cell(i: int, cell: Any) -> None:

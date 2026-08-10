@@ -6,7 +6,7 @@ from typing import Any, assert_never
 
 from .config import ScrubbingOptions, reject_unknown_keys
 from .exceptions import ProcessingError, ScrubberError
-from .notebook import Cell, get_cell_source
+from .notebook import Cell, get_cell_source, to_cell_source
 from .options import Header, Option, parse_cell_options
 
 
@@ -179,6 +179,16 @@ def _under_header(kept: str, content: str) -> str:
     return f'{kept}\n{content}' if kept else content
 
 
+def _default_clear_text(cell_type: str, opts: ScrubbingOptions) -> str:
+    """The replacement text for a cleared cell whose author supplied none.
+
+    A placeholder has to read as the kind of cell it lands in. The code default
+    is a comment, and dropping a comment into a markdown cell renders it as a
+    heading rather than as the note to the student it is meant to be.
+    """
+    return opts.clear_text_markdown if cell_type == 'markdown' else opts.clear_text
+
+
 def _omit_action(value: Any, opts: ScrubbingOptions) -> Omit:
     """Build the Omit a ``scrub-omit`` option describes.
 
@@ -251,7 +261,7 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
             _replacement_text(
                 opts.clear_tag,
                 cell_options[opts.clear_tag],
-                opts.clear_text,
+                _default_clear_text(cell_type, opts),
             ),
             header.kept,
         )
@@ -259,30 +269,49 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     return Keep()
 
 
+def _without_results(cell: Cell) -> Cell:
+    """A copy of ``cell`` carrying none of the results of having been run.
+
+    A code cell's ``outputs`` and ``execution_count`` are *required* by the
+    nbformat schema, so they are emptied rather than removed: a cell missing
+    them fails validation, and a notebook that fails validation is a notebook
+    some tool downstream will refuse. Any other cell type must not carry them at
+    all, so there they are dropped.
+
+    The copy is shallow, and that is provably enough: every key touched is
+    rebound to a fresh value rather than mutated in place, and the outputs a
+    deep copy would have duplicated are exactly what is being discarded.
+    """
+    updated: Cell = {**cell}
+
+    if updated.get('cell_type') == 'code':
+        updated['outputs'] = []
+        updated['execution_count'] = None
+    else:
+        updated.pop('outputs', None)
+        updated.pop('execution_count', None)
+
+    return updated
+
+
 def apply(cell: Cell, action: CellRewrite) -> Cell:
     """Return a new cell with ``action`` applied; ``cell`` is left alone.
-
-    The copy is shallow, and that is provably enough: the only keys touched
-    are dropped outright ('outputs', 'execution_count') or rebound to a fresh
-    string ('source'). Nothing still shared with the input is mutated, and the
-    outputs a deep copy would have duplicated are exactly what gets discarded.
 
     ``Omit`` is not accepted: an omitted cell has no output form, so the
     caller drops it rather than asking for one.
     """
-    updated: Cell = {**cell}
-    updated.pop('outputs', None)
-    updated.pop('execution_count', None)
+    updated = _without_results(cell)
 
     match action:
         case Keep():
-            pass
+            return updated
         case Clear(text=text, header=kept):
-            updated['source'] = _under_header(kept, text)
+            source = _under_header(kept, text)
         case Note(note_id=note_id, text=text, header=kept):
             suffix = f'\n{text}' if text else ''
-            updated['source'] = _under_header(kept, f'# (See notes: {note_id}){suffix}')
+            source = _under_header(kept, f'# (See notes: {note_id}){suffix}')
         case _:
             assert_never(action)
 
+    updated['source'] = to_cell_source(cell, source)
     return updated

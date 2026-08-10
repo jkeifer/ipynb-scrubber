@@ -8,10 +8,11 @@ from typing import Any, ClassVar, NoReturn, Protocol
 
 from .config import ProjectConfig, ScrubbingOptions
 from .exceptions import ScrubberError
-from .notebook import get_notebook_language
-from .notes import write_notes_file
+from .notebook import dumps_notebook, get_notebook_language, loads_notebook
+from .notes import render_notes, require_destination
 from .processor import process_notebook
 from .project import scrub_files
+from .staging import write_atomic
 
 _DEFAULTS = ScrubbingOptions()
 
@@ -111,7 +112,9 @@ class ScrubNotebook:
     def __call__(self, args: argparse.Namespace) -> int:
         try:
             try:
-                notebook = json.load(sys.stdin)
+                # Read the raw bytes: a notebook's encoding is a property of
+                # the notebook, not of the locale the tool happens to run in.
+                notebook = loads_notebook(sys.stdin.buffer.read())
             except json.JSONDecodeError as e:
                 raise ScrubberError(f'Invalid JSON input: {e}') from e
             except (OSError, UnicodeDecodeError) as e:
@@ -128,24 +131,32 @@ class ScrubNotebook:
 
             processed_notebook, notes_dict = process_notebook(notebook, options)
 
+            require_destination(
+                notes_dict,
+                args.notes_file,
+                options.note_tag,
+                'Pass --notes-file PATH.',
+            )
+
             if notes_dict:
-                if args.notes_file is None:
-                    # The exercise notebook points its reader at the notes by
-                    # id, so writing it without somewhere to put the notes
-                    # would produce a dangling reference.
-                    raise ScrubberError(
-                        f'Found {len(notes_dict)} cell(s) with note tag '
-                        f'"{args.note_tag}", but nowhere to save the notes. '
-                        'Pass --notes-file PATH.',
+                try:
+                    write_atomic(
+                        args.notes_file,
+                        render_notes(
+                            notes_dict,
+                            get_notebook_language(processed_notebook),
+                        ),
                     )
-                write_notes_file(
-                    notes_dict,
-                    args.notes_file,
-                    get_notebook_language(processed_notebook),
-                )
+                except OSError as e:
+                    raise ScrubberError(f'Error writing notes file: {e}') from e
 
             try:
-                json.dump(processed_notebook, sys.stdout, indent=1)
+                # Bytes again, for the same reason as stdin: the output encoding
+                # belongs to the notebook, not to the terminal it is piped into.
+                sys.stdout.buffer.write(
+                    dumps_notebook(processed_notebook).encode('utf-8'),
+                )
+                sys.stdout.buffer.flush()
             except OSError as e:
                 raise ScrubberError(f'Error writing output: {e}') from e
 
