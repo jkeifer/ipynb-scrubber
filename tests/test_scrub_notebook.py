@@ -41,6 +41,17 @@ def test_multiline_clear_text_flag_survives_argv(scrub_notebook, make_notebook, 
     assert output['cells'][0]['source'] == 'def add(a, b):\n    # TODO\n    pass'
 
 
+def test_clear_text_markdown_flag_is_accepted(scrub_notebook, make_notebook, code):
+    """Every registered option gets a flag, this one included."""
+    nb = make_notebook(code('x = 1'))
+    result = scrub_notebook(
+        '--clear-text-markdown',
+        '_TODO_',
+        input_data=json.dumps(nb),
+    )
+    assert result.returncode == 0
+
+
 def test_note_tag_flag_reaches_the_options(scrub_notebook, make_notebook, code):
     """A custom --note-tag is used both to detect and to name the tag error."""
     nb = make_notebook(code('x = 1', metadata={'tags': ['keepme']}))
