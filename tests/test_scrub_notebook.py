@@ -2,6 +2,8 @@ import json
 import subprocess
 import sys
 
+from tests.builders import code, make_notebook, markdown
+
 
 def test_invalid_json_input_exits_nonzero(scrub_notebook):
     result = scrub_notebook(input_data='not json')
@@ -10,7 +12,7 @@ def test_invalid_json_input_exits_nonzero(scrub_notebook):
     assert 'Traceback' not in result.stderr
 
 
-def test_output_is_valid_json_indented_by_one(scrub_notebook, make_notebook, code):
+def test_output_is_valid_json_indented_by_one(scrub_notebook):
     nb = make_notebook(code('x = 1'))
     result = scrub_notebook(input_data=json.dumps(nb))
     assert result.returncode == 0
@@ -18,7 +20,7 @@ def test_output_is_valid_json_indented_by_one(scrub_notebook, make_notebook, cod
     assert '\n "cells"' in result.stdout
 
 
-def test_flags_reach_the_options(scrub_notebook, make_notebook, code):
+def test_flags_reach_the_options(scrub_notebook):
     nb = make_notebook(code('#| my-clear:\nsecret = 1'))
     result = scrub_notebook(
         '--clear-tag',
@@ -30,7 +32,7 @@ def test_flags_reach_the_options(scrub_notebook, make_notebook, code):
     assert json.loads(result.stdout)['cells'][0]['source'] == 'REPLACED'
 
 
-def test_multiline_clear_text_flag_survives_argv(scrub_notebook, make_notebook, code):
+def test_multiline_clear_text_flag_survives_argv(scrub_notebook):
     """A multi-line --clear-text value is passed through argv intact."""
     nb = make_notebook(code('secret', metadata={'tags': ['scrub-clear']}))
     result = scrub_notebook(
@@ -43,7 +45,7 @@ def test_multiline_clear_text_flag_survives_argv(scrub_notebook, make_notebook, 
     assert output['cells'][0]['source'] == 'def add(a, b):\n    # TODO\n    pass'
 
 
-def test_clear_text_markdown_flag_is_accepted(scrub_notebook, make_notebook, code):
+def test_clear_text_markdown_flag_is_accepted(scrub_notebook):
     """Every registered option gets a flag, this one included."""
     nb = make_notebook(code('x = 1'))
     result = scrub_notebook(
@@ -54,7 +56,7 @@ def test_clear_text_markdown_flag_is_accepted(scrub_notebook, make_notebook, cod
     assert result.returncode == 0
 
 
-def test_note_tag_flag_reaches_the_options(scrub_notebook, make_notebook, code):
+def test_note_tag_flag_reaches_the_options(scrub_notebook):
     """A custom --note-tag is used both to detect and to name the tag error."""
     nb = make_notebook(code('x = 1', metadata={'tags': ['keepme']}))
     result = scrub_notebook('--note-tag', 'keepme', input_data=json.dumps(nb))
@@ -62,7 +64,7 @@ def test_note_tag_flag_reaches_the_options(scrub_notebook, make_notebook, code):
     assert "Option 'keepme' is not supported as a cell tag" in result.stderr
 
 
-def test_notes_without_notes_file_is_an_error(scrub_notebook, make_notebook, code):
+def test_notes_without_notes_file_is_an_error(scrub_notebook):
     """Notes with nowhere to go is fatal, and the error names the remedy.
 
     The exercise notebook would reference notes by id, so emitting it without
@@ -76,7 +78,7 @@ def test_notes_without_notes_file_is_an_error(scrub_notebook, make_notebook, cod
     assert 'Traceback' not in result.stderr
 
 
-def test_notes_file_is_written(tmp_path, scrub_notebook, make_notebook, code):
+def test_notes_file_is_written(tmp_path, scrub_notebook):
     nb = make_notebook(code('#| scrub-note: ex-1\nsecret = 1'))
     notes = tmp_path / 'notes.md'
     result = scrub_notebook('--notes-file', str(notes), input_data=json.dumps(nb))
@@ -84,12 +86,7 @@ def test_notes_file_is_written(tmp_path, scrub_notebook, make_notebook, code):
     assert '## ex-1' in notes.read_text()
 
 
-def test_notes_file_is_not_written_when_processing_fails(
-    tmp_path,
-    scrub_notebook,
-    make_notebook,
-    code,
-):
+def test_notes_file_is_not_written_when_processing_fails(tmp_path, scrub_notebook):
     """A validation failure leaves no partial or stale notes file on disk."""
     nb = make_notebook(code('#| scrub-note:\nsecret = 1'))  # missing id: error
     notes = tmp_path / 'notes.md'
@@ -98,11 +95,7 @@ def test_notes_file_is_not_written_when_processing_fails(
     assert not notes.exists()
 
 
-def test_failed_notebook_write_leaves_no_orphan_notes_file(
-    tmp_path,
-    make_notebook,
-    code,
-):
+def test_failed_notebook_write_leaves_no_orphan_notes_file(tmp_path):
     """Notes describe the exercise notebook, so they must not outlive its write.
 
     stdout is handed a descriptor opened for reading, so every write to it
@@ -145,11 +138,7 @@ def test_no_command_exits_two(scrubber):
     assert 'command required' in result.stderr
 
 
-def test_processing_error_exits_one_without_traceback(
-    scrub_notebook,
-    make_notebook,
-    markdown,
-):
+def test_processing_error_exits_one_without_traceback(scrub_notebook):
     nb = make_notebook(markdown('<!-- scrub-note: ex-1 -->'))
     result = scrub_notebook(input_data=json.dumps(nb))
     assert result.returncode == 1

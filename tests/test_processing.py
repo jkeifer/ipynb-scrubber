@@ -7,7 +7,7 @@ from ipynb_scrubber.exceptions import InvalidNotebookError, ProcessingError
 from ipynb_scrubber.notebook import get_notebook_language
 from ipynb_scrubber.notes import render_notes
 from ipynb_scrubber.processor import process_notebook
-from tests.builders import code, make_notebook, markdown
+from tests.builders import code, make_notebook, markdown, raw
 
 OPTS = ScrubbingOptions()
 
@@ -38,11 +38,7 @@ def test_error_is_prefixed_with_the_offending_cell_index():
         process_notebook(nb, OPTS)
 
 
-def test_internal_bug_surfaces_as_a_bug_not_a_processing_error(
-    monkeypatch,
-    make_notebook,
-    code,
-):
+def test_internal_bug_surfaces_as_a_bug_not_a_processing_error(monkeypatch):
     """Only ScrubberError carries the friendly, traceback-free contract.
 
     Anything else escaping cell processing is a defect in this tool, and
@@ -60,7 +56,7 @@ def test_internal_bug_surfaces_as_a_bug_not_a_processing_error(
         process_notebook(nb, OPTS)
 
 
-def test_input_notebook_is_untouched_on_success(make_notebook, code):
+def test_input_notebook_is_untouched_on_success():
     """process_notebook is a function, not an in-place rewrite.
 
     The caller keeps their notebook; the exercise version is a separate
@@ -151,7 +147,7 @@ def test_missing_metadata_field_is_created():
     assert result['metadata'] == {'exercise_version': True}
 
 
-def test_list_form_source_is_joined(make_notebook, code):
+def test_list_form_source_is_joined():
     """Jupyter's native on-disk format stores source as a list of lines.
 
     Option parsing and note capture both read through get_cell_source, which
@@ -214,7 +210,7 @@ def test_cell_invalid_cell_type_errors():
         process_notebook(nb, OPTS)
 
 
-def test_cell_non_dict_metadata_errors(make_notebook, code):
+def test_cell_non_dict_metadata_errors():
     nb = make_notebook({'cell_type': 'code', 'source': 'x = 1', 'metadata': 'oops'})
     with pytest.raises(
         InvalidNotebookError,
@@ -223,7 +219,7 @@ def test_cell_non_dict_metadata_errors(make_notebook, code):
         process_notebook(nb, OPTS)
 
 
-def test_cell_non_array_tags_errors(make_notebook, code):
+def test_cell_non_array_tags_errors():
     """tags as a bare string would make `in` do substring matching, silently
 
     dropping cells whose tag name happens to contain the omit tag as a
@@ -240,7 +236,7 @@ def test_cell_non_array_tags_errors(make_notebook, code):
         process_notebook(nb, OPTS)
 
 
-def test_cell_tags_with_non_string_items_errors(make_notebook, code):
+def test_cell_tags_with_non_string_items_errors():
     nb = make_notebook(code('x = 1', metadata={'tags': ['ok', 5]}))
     with pytest.raises(
         InvalidNotebookError,
@@ -249,7 +245,7 @@ def test_cell_tags_with_non_string_items_errors(make_notebook, code):
         process_notebook(nb, OPTS)
 
 
-def test_cell_non_string_non_list_source_errors(make_notebook):
+def test_cell_non_string_non_list_source_errors():
     nb = make_notebook({'cell_type': 'code', 'source': 5, 'metadata': {}})
     with pytest.raises(
         InvalidNotebookError,
@@ -259,7 +255,7 @@ def test_cell_non_string_non_list_source_errors(make_notebook):
         process_notebook(nb, OPTS)
 
 
-def test_cell_source_list_with_non_string_items_errors(make_notebook):
+def test_cell_source_list_with_non_string_items_errors():
     nb = make_notebook({'cell_type': 'code', 'source': ['ok', 5], 'metadata': {}})
     with pytest.raises(
         InvalidNotebookError,
@@ -271,7 +267,7 @@ def test_cell_source_list_with_non_string_items_errors(make_notebook):
 # --- clearing --------------------------------------------------------------
 
 
-def test_code_cell_output_and_execution_count_are_stripped(make_notebook, code):
+def test_code_cell_output_and_execution_count_are_stripped():
     nb = make_notebook(
         code(
             "print('hello')",
@@ -285,20 +281,20 @@ def test_code_cell_output_and_execution_count_are_stripped(make_notebook, code):
     assert result['cells'][0]['execution_count'] is None
 
 
-def test_empty_notebook_is_processed(make_notebook):
+def test_empty_notebook_is_processed():
     nb = make_notebook()
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'] == []
     assert result['metadata']['exercise_version'] is True
 
 
-def test_metadata_tag_clear_uses_configured_default(make_notebook, code):
+def test_metadata_tag_clear_uses_configured_default():
     nb = make_notebook(code('secret = 1', metadata={'tags': ['scrub-clear']}))
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == OPTS.clear_text
 
 
-def test_custom_clear_tag(make_notebook, code):
+def test_custom_clear_tag():
     """Only the configured clear tag clears; the default tag is inert."""
     nb = make_notebook(
         code('secret = 1', metadata={'tags': ['answer']}),
@@ -310,14 +306,14 @@ def test_custom_clear_tag(make_notebook, code):
     assert 'other_secret' in result['cells'][1]['source']
 
 
-def test_custom_clear_text(make_notebook, code):
+def test_custom_clear_text():
     nb = make_notebook(code('secret = 1', metadata={'tags': ['scrub-clear']}))
     opts = ScrubbingOptions(clear_text='# YOUR CODE HERE')
     result, _ = process_notebook(nb, opts)
     assert result['cells'][0]['source'] == '# YOUR CODE HERE'
 
 
-def test_quarto_clear_with_inline_text_and_empty_text(make_notebook, code):
+def test_quarto_clear_with_inline_text_and_empty_text():
     nb = make_notebook(
         code('#| scrub-clear: Custom replacement text\nprint("solution")'),
         code('#| scrub-clear: ""\nprint("empty text")'),
@@ -327,7 +323,7 @@ def test_quarto_clear_with_inline_text_and_empty_text(make_notebook, code):
     assert result['cells'][1]['source'] == ''
 
 
-def test_markdown_cell_clearing(make_notebook, markdown):
+def test_markdown_cell_clearing():
     nb = make_notebook(
         markdown(
             '<!-- scrub-clear: "**Your answer here**" -->\n\n'
@@ -345,7 +341,7 @@ def test_markdown_cell_clearing(make_notebook, markdown):
     assert result['cells'][2]['source'] == OPTS.clear_text_markdown
 
 
-def test_markdown_default_placeholder_is_not_a_heading(make_notebook, markdown):
+def test_markdown_default_placeholder_is_not_a_heading():
     """The code default is a comment, which markdown would render as an <h1>."""
     nb = make_notebook(markdown('answer', metadata={'tags': ['scrub-clear']}))
     result, _ = process_notebook(nb, OPTS)
@@ -353,7 +349,7 @@ def test_markdown_default_placeholder_is_not_a_heading(make_notebook, markdown):
     assert not result['cells'][0]['source'].startswith('#')
 
 
-def test_raw_cell_clearing_via_tag(make_notebook, raw):
+def test_raw_cell_clearing_via_tag():
     """Raw cells support only metadata tags, no source-based options."""
     nb = make_notebook(
         raw('$$\\int_0^1 x^2 dx = \\frac{1}{3}$$', metadata={'tags': ['scrub-clear']}),
@@ -362,7 +358,7 @@ def test_raw_cell_clearing_via_tag(make_notebook, raw):
     assert result['cells'][0]['source'] == OPTS.clear_text
 
 
-def test_multiline_clear_text_option_survives(make_notebook, code):
+def test_multiline_clear_text_option_survives():
     """A multi-line clear_text value (however configured) reaches the cell."""
     nb = make_notebook(code('secret', metadata={'tags': ['scrub-clear']}))
     opts = ScrubbingOptions(clear_text='def add(a, b):\n    # TODO\n    pass')
@@ -370,7 +366,7 @@ def test_multiline_clear_text_option_survives(make_notebook, code):
     assert result['cells'][0]['source'] == 'def add(a, b):\n    # TODO\n    pass'
 
 
-def test_code_cell_multiline_block(make_notebook, code):
+def test_code_cell_multiline_block():
     """Multi-line replacement via a block scalar in a code cell."""
     nb = make_notebook(
         code(
@@ -388,7 +384,7 @@ def test_code_cell_multiline_block(make_notebook, code):
     )
 
 
-def test_markdown_cell_multiline_block(make_notebook, markdown):
+def test_markdown_cell_multiline_block():
     """Multi-line replacement via a block scalar in a markdown cell."""
     nb = make_notebook(
         markdown(
@@ -406,14 +402,14 @@ def test_markdown_cell_multiline_block(make_notebook, markdown):
     )
 
 
-def test_quoted_escape_sequences(make_notebook, code):
+def test_quoted_escape_sequences():
     """A double-quoted value expands escapes, so one line can carry two."""
     nb = make_notebook(code('#| scrub-clear: "line one\\nline two"\nprint("x")'))
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == 'line one\nline two'
 
 
-def test_malformed_header_errors(make_notebook, code):
+def test_malformed_header_errors():
     """A header that is not valid YAML fails the run, naming the cell."""
     nb = make_notebook(
         code('# Intro'),
@@ -426,7 +422,7 @@ def test_malformed_header_errors(make_notebook, code):
         process_notebook(nb, OPTS)
 
 
-def test_unterminated_markdown_comment_errors(make_notebook, markdown):
+def test_unterminated_markdown_comment_errors():
     """An unterminated markdown comment is a hard error naming the cell."""
     nb = make_notebook(
         markdown('# Intro'),
@@ -439,7 +435,7 @@ def test_unterminated_markdown_comment_errors(make_notebook, markdown):
 # --- omitting ----------------------------------------------------------
 
 
-def test_omit_via_metadata_tag(make_notebook, markdown, code):
+def test_omit_via_metadata_tag():
     nb = make_notebook(
         markdown('# Keep this'),
         code("print('this should be omitted')", metadata={'tags': ['scrub-omit']}),
@@ -450,7 +446,7 @@ def test_omit_via_metadata_tag(make_notebook, markdown, code):
     assert sources == ['# Keep this', "print('keep this')"]
 
 
-def test_omit_via_source_option(make_notebook, code):
+def test_omit_via_source_option():
     nb = make_notebook(
         code("#| scrub-omit:\nprint('omit me')"),
         code("print('keep me')"),
@@ -460,7 +456,7 @@ def test_omit_via_source_option(make_notebook, code):
     assert 'keep me' in result['cells'][0]['source']
 
 
-def test_custom_omit_tag(make_notebook, code):
+def test_custom_omit_tag():
     nb = make_notebook(
         code("print('remove')", metadata={'tags': ['remove-me']}),
         code("print('keep')", metadata={'tags': ['scrub-omit']}),  # default tag inert
@@ -471,7 +467,7 @@ def test_custom_omit_tag(make_notebook, code):
     assert result['cells'][0]['source'] == "print('keep')"
 
 
-def test_omit_beats_clear_when_both_tags_present(make_notebook, code):
+def test_omit_beats_clear_when_both_tags_present():
     nb = make_notebook(
         code('# Cell 0: normal'),
         code('# Cell 1: solution', metadata={'tags': ['scrub-clear']}),
@@ -483,7 +479,7 @@ def test_omit_beats_clear_when_both_tags_present(make_notebook, code):
     assert sources == ['# Cell 0: normal', OPTS.clear_text]
 
 
-def test_two_source_options_on_one_cell_is_an_error(make_notebook, code):
+def test_two_source_options_on_one_cell_is_an_error():
     """Only one scrubber option per source header is allowed.
 
     A cell's source header may carry at most one scrubber option (Task 4);
@@ -496,7 +492,7 @@ def test_two_source_options_on_one_cell_is_an_error(make_notebook, code):
         process_notebook(nb, OPTS)
 
 
-def test_metadata_omit_beats_source_note(make_notebook, code):
+def test_metadata_omit_beats_source_note():
     """Omit-as-tag and note-as-source-option is allowed: omit wins.
 
     Unlike two source options on the same header, mixing a metadata tag
@@ -511,7 +507,7 @@ def test_metadata_omit_beats_source_note(make_notebook, code):
     assert notes == {}
 
 
-def test_omit_metadata_tag_beats_note_metadata_tag(make_notebook, code):
+def test_omit_metadata_tag_beats_note_metadata_tag():
     """A cell tagged both omit and note is omitted, not an error."""
     nb = make_notebook(
         code(
@@ -528,7 +524,7 @@ def test_omit_metadata_tag_beats_note_metadata_tag(make_notebook, code):
 # --- notes ---------------------------------------------------------------
 
 
-def test_note_cell_captures_original_and_clears(make_notebook, code):
+def test_note_cell_captures_original_and_clears():
     nb = make_notebook(
         code('#| scrub-note: exercise-1\ndef solution():\n    return 42'),
     )
@@ -540,7 +536,7 @@ def test_note_cell_captures_original_and_clears(make_notebook, code):
     )
 
 
-def test_note_cell_with_custom_replacement(make_notebook, code):
+def test_note_cell_with_custom_replacement():
     nb = make_notebook(
         code(
             '#| scrub-note:\n'
@@ -563,14 +559,14 @@ def test_note_cell_with_custom_replacement(make_notebook, code):
         '#| scrub-note:\n#|   text: "# YOUR CODE HERE"\ndef solution():\n    return 42',
     ],
 )
-def test_note_cell_without_id_errors(make_notebook, code, source):
+def test_note_cell_without_id_errors(source):
     """A scrub-note without a usable id is an error, not a silent pass-through."""
     nb = make_notebook(code(source))
     with pytest.raises(ProcessingError, match=r'^Cell 0: .*requires an id'):
         process_notebook(nb, OPTS)
 
 
-def test_note_cell_block_replacement(make_notebook, code):
+def test_note_cell_block_replacement():
     """A note's replacement text can span lines via a block scalar."""
     nb = make_notebook(
         code(
@@ -590,7 +586,7 @@ def test_note_cell_block_replacement(make_notebook, code):
     assert 'ex-1' in notes
 
 
-def test_note_cell_with_empty_replacement(make_notebook, code):
+def test_note_cell_with_empty_replacement():
     """Empty replacement text clears the cell to just the note reference."""
     nb = make_notebook(
         code(
@@ -606,7 +602,7 @@ def test_note_cell_with_empty_replacement(make_notebook, code):
     assert 'my-id' in notes
 
 
-def test_note_cell_non_code_errors(make_notebook, markdown):
+def test_note_cell_non_code_errors():
     """A note tag on a non-code cell is a hard error, not a silent no-op."""
     nb = make_notebook(markdown('<!-- scrub-note: md-note -->\n## Solution'))
     with pytest.raises(
@@ -616,7 +612,7 @@ def test_note_cell_non_code_errors(make_notebook, markdown):
         process_notebook(nb, OPTS)
 
 
-def test_note_cell_rejects_an_unknown_key(make_notebook, code):
+def test_note_cell_rejects_an_unknown_key():
     """A misspelled key fails the run rather than being silently dropped."""
     nb = make_notebook(
         code(
@@ -631,7 +627,7 @@ def test_note_cell_rejects_an_unknown_key(make_notebook, code):
         process_notebook(nb, OPTS)
 
 
-def test_note_cell_with_custom_note_tag(make_notebook, code):
+def test_note_cell_with_custom_note_tag():
     """A configured custom note_tag, not just 'scrub-note', is recognized in source."""
     nb = make_notebook(
         code('#| solution-note: custom-id\ndef custom_solution():\n    return 1'),
@@ -644,7 +640,7 @@ def test_note_cell_with_custom_note_tag(make_notebook, code):
     )
 
 
-def test_note_absent_on_markdown_and_raw_cells_is_fine(make_notebook, markdown, raw):
+def test_note_absent_on_markdown_and_raw_cells_is_fine():
     """A cell without a note option is untouched by the note check."""
     nb = make_notebook(
         markdown('## Solution'),
@@ -664,7 +660,7 @@ def test_note_absent_on_markdown_and_raw_cells_is_fine(make_notebook, markdown, 
         ('raw', 'raw solution content'),
     ],
 )
-def test_note_metadata_tag_errors(make_notebook, cell_type, source):
+def test_note_metadata_tag_errors(cell_type, source):
     """The note tag as Jupyter cell metadata is a hard error, never a no-op."""
     nb = make_notebook(
         {
@@ -680,7 +676,7 @@ def test_note_metadata_tag_errors(make_notebook, cell_type, source):
         process_notebook(nb, OPTS)
 
 
-def test_note_metadata_tag_with_custom_tag_errors(make_notebook, code):
+def test_note_metadata_tag_with_custom_tag_errors():
     """The error follows a custom note_tag rather than the default name."""
     nb = make_notebook(
         code('def solution():\n    return 42', metadata={'tags': ['keepme']}),
@@ -707,13 +703,13 @@ def test_non_object_notebook_metadata_is_rejected():
             process_notebook({'cells': [], 'metadata': bad}, OPTS)
 
 
-def test_notebook_without_metadata_is_accepted(code):
+def test_notebook_without_metadata_is_accepted():
     """metadata is optional; the processor supplies it."""
     result, _ = process_notebook({'cells': [code('x = 1')]}, OPTS)
     assert result['metadata'] == {'exercise_version': True}
 
 
-def test_notes_fence_follows_the_notebook_language(code):
+def test_notes_fence_follows_the_notebook_language():
     """A non-Python notebook gets its notes fenced in its own language."""
     nb = make_notebook(
         code('#| scrub-note: ex-1\nx <- 1'),
@@ -724,7 +720,7 @@ def test_notes_fence_follows_the_notebook_language(code):
     assert '```r\nx <- 1\n```' in rendered
 
 
-def test_note_body_excludes_the_option_header(make_notebook, code):
+def test_note_body_excludes_the_option_header():
     """The note saves the cell's content, not the instruction that marked it.
 
     A scrub-note carrying replacement text holds the very scaffolding the
@@ -749,7 +745,7 @@ def test_note_body_excludes_the_option_header(make_notebook, code):
     assert '<OFFSET>' not in notes['cell13']
 
 
-def test_foreign_options_survive_a_cleared_cell(make_notebook, code):
+def test_foreign_options_survive_a_cleared_cell():
     """'#| echo: false' configures the cell that remains, so it must remain too.
 
     The header is shared with Quarto. Replacing a cell's content is no reason
@@ -764,7 +760,7 @@ def test_foreign_options_survive_a_cleared_cell(make_notebook, code):
     )
 
 
-def test_foreign_options_survive_a_noted_cell(make_notebook, code):
+def test_foreign_options_survive_a_noted_cell():
     """A block scalar's content goes with the option that opened it, not beyond."""
     source = '\n'.join(
         [
@@ -786,7 +782,7 @@ def test_foreign_options_survive_a_noted_cell(make_notebook, code):
     assert notes == {'ex-1': 'value_offset = -0.1'}
 
 
-def test_a_cell_with_no_foreign_options_gains_no_header(make_notebook, code):
+def test_a_cell_with_no_foreign_options_gains_no_header():
     result, _ = process_notebook(
         make_notebook(code('#| scrub-clear: fill me in\nX = 1')),
         OPTS,
