@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
 #: Mode given to a staged file whose target does not already exist. A
 #: temporary file is created readable only by its owner, which is wrong for an
@@ -47,8 +47,8 @@ def stage(final: Path, content: str) -> StagedFile:
     """Write the content destined for ``final`` to a temporary file beside it.
 
     The temporary file is created in ``final``'s own directory, which is
-    created if it does not exist, so that :func:`commit` can move it into place
-    with an atomic rename. Nothing at ``final`` is touched.
+    created if it does not exist, so that :func:`commit_all` can move it into
+    place with an atomic rename. Nothing at ``final`` is touched.
 
     The staged file takes ``final``'s mode if ``final`` exists, and
     :data:`DEFAULT_FILE_MODE` otherwise. It is written as :data:`ENCODING` with
@@ -59,7 +59,7 @@ def stage(final: Path, content: str) -> StagedFile:
         content: The whole content to write.
 
     Returns:
-        The staged file, to hand to :func:`commit` or :func:`discard`.
+        The staged file, to hand to :func:`commit_all` or :func:`discard`.
 
     Raises:
         OSError: If the directory or the temporary file cannot be created or
@@ -91,18 +91,8 @@ def stage(final: Path, content: str) -> StagedFile:
     return StagedFile(temp=temp, final=final)
 
 
-def commit(staged: Iterable[StagedFile]) -> None:
-    """Move every staged file onto its target path, with the guarantees above.
-
-    Prefer :func:`commit_all`, which also cleans up after a failure. This is the
-    rename half on its own.
-
-    Args:
-        staged: The staged files to commit, in the order they should appear.
-
-    Raises:
-        OSError: If a staged file cannot be moved onto its target.
-    """
+def _commit(staged: Iterable[StagedFile]) -> None:
+    """The rename half of :func:`commit_all`, without the cleanup."""
     for item in staged:
         item.temp.replace(item.final)
 
@@ -110,10 +100,10 @@ def commit(staged: Iterable[StagedFile]) -> None:
 def discard(staged: Iterable[StagedFile]) -> None:
     """Remove staged temporary files, leaving their target paths alone.
 
-    Anything :func:`commit` already moved is skipped, so discarding after a
-    partial commit removes only what is still staged. An error removing a
-    temporary file is suppressed: a discard runs in response to some other
-    failure, and that failure is the one worth reporting.
+    Anything already committed is skipped, so discarding after a partial commit
+    removes only what is still staged, and discarding twice is harmless. An
+    error removing a temporary file is suppressed: a discard runs in response to
+    some other failure, and that failure is the one worth reporting.
 
     Args:
         staged: The staged files to remove.
@@ -138,6 +128,28 @@ def commit_all(staged: Iterable[StagedFile]) -> None:
     """
     items = list(staged)
     try:
-        commit(items)
+        _commit(items)
     finally:
         discard(items)
+
+
+@contextlib.contextmanager
+def staged_batch() -> Iterator[list[StagedFile]]:
+    """Collect staged files, removing them all if the block does not finish.
+
+    Writing a batch is two phases -- stage everything, then commit -- and
+    anything staged has to be removed if the first never reaches the second.
+    Owning the batch here keeps that cleanup in one place and runs it for any
+    exception, :class:`KeyboardInterrupt` included, since a temporary file left
+    beside its target is litter however the run ended.
+
+    Yields:
+        The batch to append staged files to. Committing it stays the caller's,
+        as only the caller knows when the batch is complete.
+    """
+    staged: list[StagedFile] = []
+    try:
+        yield staged
+    except BaseException:
+        discard(staged)
+        raise

@@ -10,7 +10,7 @@ from .exceptions import MissingNotesDestinationError, ScrubberError
 from .notes import require_destination
 from .processor import scrub
 from .project import scrub_files
-from .staging import StagedFile, commit_all, discard, stage
+from .staging import commit_all, stage, staged_batch
 
 _DEFAULTS = ScrubbingOptions()
 
@@ -134,8 +134,7 @@ class ScrubNotebook:
             except MissingNotesDestinationError as e:
                 raise ScrubberError(f'{e} Pass --notes-file PATH.') from e
 
-            staged: list[StagedFile] = []
-            try:
+            with staged_batch() as staged:
                 if result.notes_text is not None:
                     try:
                         staged.append(stage(notes_file, result.notes_text))
@@ -158,9 +157,6 @@ class ScrubNotebook:
                     commit_all(staged)
                 except OSError as e:
                     raise ScrubberError(f'Error writing notes file: {e}') from e
-            except BaseException:
-                discard(staged)
-                raise
 
         except ScrubberError as e:
             printe(f'Error: {e}')
