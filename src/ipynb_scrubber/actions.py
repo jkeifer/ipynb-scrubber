@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, assert_never
 
 from .config import ScrubbingOptions, reject_unknown_keys
 from .exceptions import ProcessingError, ScrubberError
 from .notebook import Cell, get_cell_source
-from .options import Header, parse_cell_options
+from .options import Header, Option, parse_cell_options
 
 
 @dataclass(frozen=True)
@@ -103,31 +104,45 @@ def _note_action(value: Any, opts: ScrubbingOptions) -> Note:
     )
 
 
-def _scrubber_names(opts: ScrubbingOptions) -> tuple[str, str, str]:
-    """The option names this tool defines, under their configured spellings."""
-    return (opts.clear_tag, opts.omit_tag, opts.note_tag)
+def _scrubber_options(opts: ScrubbingOptions) -> tuple[Option, ...]:
+    """The options this tool defines, under their configured spellings.
+
+    ``takes_text`` is what tells the parser whose values a YAML comment could
+    silently eat. ``scrub-omit`` carries no value, so it has none to lose.
+    """
+    return (
+        Option(opts.clear_tag, takes_text=True),
+        Option(opts.omit_tag, takes_text=False),
+        Option(opts.note_tag, takes_text=True),
+    )
 
 
-def _check_one_scrubber_option(header: Header, opts: ScrubbingOptions) -> None:
+def _check_one_scrubber_option(
+    header: Header,
+    options: Collection[Option],
+) -> None:
     """Require the header to carry no more than one scrubber option.
 
     Under-indented block content is a sibling option as far as YAML is
     concerned, and reading it as one would silently delete a cell, so the
-    ambiguity is refused. When the header opens a block, the message says how
-    to resolve it.
+    ambiguity is refused. When one of the options present opens a block, the
+    message names it, because that is the line the content belongs under.
 
     Raises:
         ProcessingError: If more than one scrubber option is present.
     """
-    present = sorted(set(_scrubber_names(opts)) & header.options.keys())
+    present = sorted(
+        {option.name for option in options} & header.options.keys(),
+    )
     if len(present) < 2:
         return
 
     message = f'only one scrubber option per cell, but found {", ".join(present)}.'
-    if header.block_styled:
+    openers = sorted(header.block_styled.intersection(present))
+    if openers:
         message += (
-            ' If one of these was meant as block content, indent it more '
-            'deeply than the option line that opens the block'
+            f" If one of these was meant as content of '{openers[0]}', indent "
+            "it more deeply than that option's line"
         )
     raise ProcessingError(message)
 
@@ -156,8 +171,13 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     A cell's source header may carry at most one scrubber option; two is an
     error, because an under-indented block content line is indistinguishable
     from a sibling option and silently deleting a cell is the worse outcome.
-    Metadata tags are not subject to that rule, so the documented
-    omit-tag-beats-note-tag precedence still applies via guard order.
+    Metadata tags are not subject to that rule.
+
+    A tag carries presence and nothing else, which is exactly what an option
+    written with no value carries, so the two spellings merge into one mapping
+    and a single precedence order covers both. The header wins where both name
+    the same option, and the order is the documented one: omit, then note, then
+    clear.
 
     Raises:
         ProcessingError: If the cell's options are malformed, misplaced, or
@@ -166,13 +186,12 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     tags: list[str] = cell.get('metadata', {}).get('tags', [])
     cell_type = cell.get('cell_type', '')
     source = get_cell_source(cell)
-    header = parse_cell_options(cell_type, source, _scrubber_names(opts))
-    cell_options = header.options
+    scrubber_options = _scrubber_options(opts)
+    header = parse_cell_options(cell_type, source, scrubber_options)
 
-    _check_one_scrubber_option(header, opts)
+    _check_one_scrubber_option(header, scrubber_options)
 
-    if opts.omit_tag in tags:
-        return Omit()
+    cell_options: dict[str, Any] = {**dict.fromkeys(tags), **header.options}
 
     if opts.omit_tag in cell_options:
         return _omit_action(cell_options[opts.omit_tag], opts)
@@ -198,8 +217,6 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
                 opts.clear_text,
             ),
         )
-    if opts.clear_tag in tags:
-        return Clear(opts.clear_text)
 
     return Keep()
 
