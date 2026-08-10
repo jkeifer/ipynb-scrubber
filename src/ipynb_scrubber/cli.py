@@ -15,6 +15,16 @@ from .project import scrub_files
 
 _DEFAULTS = ScrubbingOptions()
 
+#: What each scrubbing option does, by its config-file key. The keys come from
+#: ScrubbingOptions.KEYS, which is the single source of truth for which options
+#: exist; an option added there needs a line here to describe itself.
+_OPTION_HELP: dict[str, str] = {
+    'clear-tag': 'Tag marking cells to clear',
+    'clear-text': 'Text for cleared cells where unspecified',
+    'omit-tag': 'Tag marking cells to omit entirely',
+    'note-tag': 'Option name marking cells to save to notes',
+}
+
 
 def printe(*args: object, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)  # noqa: T201
@@ -92,26 +102,13 @@ class ScrubNotebook:
     name = 'scrub-notebook'
 
     def set_args(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            '--clear-tag',
-            default=_DEFAULTS.clear_tag,
-            help='Tag marking cells to clear',
-        )
-        parser.add_argument(
-            '--clear-text',
-            default=_DEFAULTS.clear_text,
-            help='Text for cleared cells where unspecified',
-        )
-        parser.add_argument(
-            '--omit-tag',
-            default=_DEFAULTS.omit_tag,
-            help='Tag marking cells to omit entirely',
-        )
-        parser.add_argument(
-            '--note-tag',
-            default=_DEFAULTS.note_tag,
-            help='Option name marking cells to save to notes',
-        )
+        for key, name in ScrubbingOptions.KEYS.items():
+            parser.add_argument(
+                f'--{key}',
+                dest=name,
+                default=getattr(_DEFAULTS, name),
+                help=_OPTION_HELP[key],
+            )
         parser.add_argument(
             '--notes-file',
             type=Path,
@@ -133,10 +130,9 @@ class ScrubNotebook:
                 raise ScrubberError(f'Error reading input: {e}') from e
 
             options = ScrubbingOptions(
-                clear_tag=args.clear_tag,
-                clear_text=args.clear_text,
-                omit_tag=args.omit_tag,
-                note_tag=args.note_tag,
+                **{
+                    name: getattr(args, name) for name in ScrubbingOptions.KEYS.values()
+                },
             )
 
             processed_notebook, notes_dict = process_notebook(notebook, options)
