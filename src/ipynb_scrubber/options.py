@@ -211,32 +211,6 @@ def _describe(error: yaml.YAMLError, text: str) -> str:
     return f'Invalid cell option header: {error}'
 
 
-def _missing_colon(name: str) -> ProcessingError:
-    """The error for an option name written without the colon that names it.
-
-    The header is YAML, and an option is a mapping entry, so the colon is what
-    makes a name an option at all. Without it the name is a plain string, which
-    also swallows any header lines below it.
-    """
-    return ProcessingError(
-        f"Option '{name}' is missing its colon. The cell option header is YAML "
-        f"and an option is a 'name: value' entry, so write '{name}:'",
-    )
-
-
-def _not_a_mapping(data: Any) -> ProcessingError:
-    """The error for a header that holds something other than a mapping.
-
-    A header whose opening line is a bare option name never reaches this: the
-    colon it is missing is the more useful thing to say. What is left is a
-    shape no option can be read out of at all.
-    """
-    return ProcessingError(
-        "Cell option header must be a mapping of 'name: value' entries, "
-        f'but got {type(data).__name__}',
-    )
-
-
 def _reject_repeated_names(
     entries: Collection[tuple[yaml.Node, yaml.Node]],
     prefix: str = '',
@@ -472,10 +446,24 @@ def _read(split: _Split, options: Collection[Option]) -> Header:
             lines = split.header.split('\n')
             if not _claims_a_name(node, lines, names):
                 return Header()
+            # A header opening on a bare option name is told about the colon
+            # rather than about the mapping: the header is YAML and an option
+            # is a mapping entry, so the colon is what makes a name an option
+            # at all, and without it the name is a plain string that also
+            # swallows any header lines below it. That is the more useful thing
+            # to say, so what is left for the second message is a shape no
+            # option can be read out of at all.
             opener = _opening_line(node, lines)
             if opener in names:
-                raise _missing_colon(opener)
-            raise _not_a_mapping(data)
+                raise ProcessingError(
+                    f"Option '{opener}' is missing its colon. The cell option "
+                    "header is YAML and an option is a 'name: value' entry, so "
+                    f"write '{opener}:'",
+                )
+            raise ProcessingError(
+                "Cell option header must be a mapping of 'name: value' "
+                f'entries, but got {type(data).__name__}',
+            )
 
         ours = [
             (key, value)
