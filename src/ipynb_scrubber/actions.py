@@ -100,8 +100,14 @@ def _replacement_text(name: str, value: Any, default: str) -> str:
     return value
 
 
-def _note_id(value: Any, opts: ScrubbingOptions) -> str:
-    """The note id from a ``scrub-note`` scalar or its mapping's ``id``.
+def _note_id(value: Any, name: str) -> str:
+    """``value`` as the id a note is filed under, trimmed of its whitespace.
+
+    The caller has already taken the id out of whichever spelling of the option
+    carried it, so what arrives here is the id itself either way. ``name`` is
+    the option's configured spelling, which is all the message needs to be
+    advice about the header in front of its author rather than about the
+    default one.
 
     Raises:
         ProcessingError: If the id is missing, empty, or not text.
@@ -109,7 +115,7 @@ def _note_id(value: Any, opts: ScrubbingOptions) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     raise ProcessingError(
-        f"Option '{opts.note_tag}' requires an id, e.g. '{opts.note_tag}: exercise-1'",
+        f"Option '{name}' requires an id, e.g. '{name}: exercise-1'",
     )
 
 
@@ -149,7 +155,7 @@ def _note_action(value: Any, marked: _Marked) -> Note:
     kept = marked.header.kept
 
     if not isinstance(value, dict):
-        return Note(_note_id(value, opts), opts.clear_text, body, kept)
+        return Note(_note_id(value, opts.note_tag), opts.clear_text, body, kept)
 
     try:
         reject_unknown_keys(value, ('id', 'text'), f'{opts.note_tag} key')
@@ -157,7 +163,7 @@ def _note_action(value: Any, marked: _Marked) -> Note:
         raise ProcessingError(str(e)) from e
 
     return Note(
-        _note_id(value.get('id'), opts),
+        _note_id(value.get('id'), opts.note_tag),
         _replacement_text(
             f'{opts.note_tag}.text',
             value.get('text'),
