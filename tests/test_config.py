@@ -318,6 +318,28 @@ def test_file_override_colliding_with_inherited_tag_is_rejected():
         )
 
 
+@pytest.mark.parametrize(
+    'field_name',
+    [f.name for f in dataclasses.fields(ScrubbingOptions)],
+)
+def test_options_cannot_be_mutated_after_construction(field_name):
+    """Every rule above is checked in __post_init__ and nowhere else.
+
+    An assignment would skip all of them, leaving an instance holding a value
+    the constructor rejects — 'no' as a tag name is the whole of the check
+    above, defeated. Frozen is what makes those checks the only way in.
+    """
+    opts = ScrubbingOptions()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(opts, field_name, 'no')
+
+
+def test_replace_still_revalidates():
+    """Freezing must not cost the check replace() runs for per-file overrides."""
+    with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
+        dataclasses.replace(ScrubbingOptions(), omit_tag='no')
+
+
 def test_from_file_missing_path_errors():
     with pytest.raises(ScrubberError, match='Config file not found'):
         ProjectConfig.from_file(Path('/nonexistent/does-not-exist.toml'))

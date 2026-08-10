@@ -322,6 +322,23 @@ below that cell's option header.
 `ScrubbingOptions(clear_text='# YOUR CODE HERE')` mirrors
 `--clear-text '# YOUR CODE HERE'`.
 
+Instances are immutable: assigning to a field raises. Every rule the options
+enforce — the value types, and the tag names being usable, readable back as
+text and distinct from each other — is checked when an instance is built, and
+a settable field would be a way around all of them. Derive a modified copy
+instead, which is checked the same way:
+
+```python
+import dataclasses
+
+from ipynb_scrubber import ScrubbingOptions
+
+opts = ScrubbingOptions()
+
+opts.merged_with({'clear-text': '# YOUR CODE HERE'})  # by config key
+dataclasses.replace(opts, clear_text='# YOUR CODE HERE')  # by field name
+```
+
 ### Scrubbing a notebook end to end
 
 `scrub` is the whole pipeline both commands run — parse, process, render —
