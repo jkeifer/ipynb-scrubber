@@ -7,20 +7,15 @@ from ipynb_scrubber.exceptions import InvalidNotebookError, ProcessingError
 from ipynb_scrubber.notebook import get_notebook_language
 from ipynb_scrubber.notes import render_notes
 from ipynb_scrubber.processor import process_notebook
-from tests.builders import make_notebook
+from tests.builders import code, make_notebook, markdown
 
 OPTS = ScrubbingOptions()
 
 
-def notebook(*sources: tuple[str, str]):
-    """A notebook from (cell_type, source) pairs, for tests that vary both."""
-    return make_notebook(*({'cell_type': ct, 'source': src} for ct, src in sources))
-
-
 def test_duplicate_note_ids_error():
-    nb = notebook(
-        ('code', '#| scrub-note: ex-1\nSOLUTION_A = 1'),
-        ('code', '#| scrub-note: ex-1\nSOLUTION_B = 2'),
+    nb = make_notebook(
+        code('#| scrub-note: ex-1\nSOLUTION_A = 1'),
+        code('#| scrub-note: ex-1\nSOLUTION_B = 2'),
     )
     with pytest.raises(
         ProcessingError,
@@ -33,11 +28,11 @@ def test_duplicate_note_ids_error():
 
 
 def test_error_is_prefixed_with_the_offending_cell_index():
-    nb = notebook(
-        ('code', 'a = 1'),
-        ('code', 'b = 2'),
-        ('code', 'c = 3'),
-        ('markdown', '<!-- scrub-note: x -->'),
+    nb = make_notebook(
+        code('a = 1'),
+        code('b = 2'),
+        code('c = 3'),
+        markdown('<!-- scrub-note: x -->'),
     )
     with pytest.raises(ProcessingError, match=r'^Cell 3: '):
         process_notebook(nb, OPTS)
@@ -97,27 +92,18 @@ def test_input_notebook_is_untouched_after_a_mid_notebook_error():
     Processing is atomic, so a failure part way through leaves the caller's
     notebook exactly as they handed it over, rather than half-scrubbed.
     """
-    nb = {
-        'cells': [
-            {
-                'cell_type': 'code',
-                'source': '#| scrub-note: dupe\nx = 1',
-                'metadata': {},
-                'outputs': [{'output_type': 'stream', 'text': ['1\n']}],
-                'execution_count': 3,
-            },
-            {
-                'cell_type': 'code',
-                'source': '#| scrub-note: dupe\ny = 2',
-                'metadata': {},
-                'outputs': [{'output_type': 'stream', 'text': ['2\n']}],
-                'execution_count': 4,
-            },
-        ],
-        'metadata': {},
-        'nbformat': 4,
-        'nbformat_minor': 4,
-    }
+    nb = make_notebook(
+        code(
+            '#| scrub-note: dupe\nx = 1',
+            outputs=[{'output_type': 'stream', 'text': ['1\n']}],
+            execution_count=3,
+        ),
+        code(
+            '#| scrub-note: dupe\ny = 2',
+            outputs=[{'output_type': 'stream', 'text': ['2\n']}],
+            execution_count=4,
+        ),
+    )
     before = copy.deepcopy(nb)
 
     with pytest.raises(ProcessingError, match='Duplicate note id'):
@@ -127,26 +113,26 @@ def test_input_notebook_is_untouched_after_a_mid_notebook_error():
 
 
 def test_notes_capture_original_source_before_clearing():
-    nb = notebook(('code', '#| scrub-note: ex-1\nSOLUTION = 1'))
+    nb = make_notebook(code('#| scrub-note: ex-1\nSOLUTION = 1'))
     result, notes = process_notebook(nb, OPTS)
     assert notes == {'ex-1': 'SOLUTION = 1'}
     assert result['cells'][0]['source'] == f'# (See notes: ex-1)\n{OPTS.clear_text}'
 
 
 def test_omitted_cells_are_removed():
-    nb = notebook(('code', 'keep = 1'), ('code', '#| scrub-omit:\ndrop = 2'))
+    nb = make_notebook(code('keep = 1'), code('#| scrub-omit:\ndrop = 2'))
     result, _ = process_notebook(nb, OPTS)
     assert [c['source'] for c in result['cells']] == ['keep = 1']
 
 
 def test_exercise_version_metadata_is_set():
-    result, _ = process_notebook(notebook(('code', 'x = 1')), OPTS)
+    result, _ = process_notebook(make_notebook(code('x = 1')), OPTS)
     assert result['metadata']['exercise_version'] is True
 
 
 def test_unknown_top_level_fields_are_carried_through():
     """Rebuilding the notebook must not drop keys this tool does not model."""
-    nb = notebook(('code', 'x = 1'))
+    nb = make_notebook(code('x = 1'))
     nb['metadata']['kernelspec'] = {'name': 'python3'}
     nb['someday_field'] = 'keep me'
 
@@ -729,10 +715,10 @@ def test_notebook_without_metadata_is_accepted(code):
 
 def test_notes_fence_follows_the_notebook_language(code):
     """A non-Python notebook gets its notes fenced in its own language."""
-    nb = {
-        'cells': [code('#| scrub-note: ex-1\nx <- 1')],
-        'metadata': {'language_info': {'name': 'r'}},
-    }
+    nb = make_notebook(
+        code('#| scrub-note: ex-1\nx <- 1'),
+        metadata={'language_info': {'name': 'r'}},
+    )
     _, notes = process_notebook(nb, OPTS)
     rendered = render_notes(notes, get_notebook_language(nb))
     assert '```r\nx <- 1\n```' in rendered

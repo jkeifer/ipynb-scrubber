@@ -9,31 +9,25 @@ from ipynb_scrubber import project, staging
 from ipynb_scrubber.cli import ScrubProject
 from ipynb_scrubber.config import FileEntry
 from ipynb_scrubber.exceptions import ScrubberError
+from tests.builders import code, make_notebook
 
 
 @pytest.fixture
 def sample_notebook():
-    """A notebook with a clear-tagged and an omit-tagged cell."""
-    return {
-        'cells': [
-            {'cell_type': 'code', 'source': '# Regular code', 'metadata': {}},
-            {
-                'cell_type': 'code',
-                'source': '#| scrub-clear:\ndef solution():\n    return 42',
-                'metadata': {},
-                'outputs': [{'data': {'text/plain': ['42']}}],
-                'execution_count': 1,
-            },
-            {
-                'cell_type': 'code',
-                'source': "print('instructor only')",
-                'metadata': {'tags': ['scrub-omit']},
-            },
-        ],
-        'metadata': {},
-        'nbformat': 4,
-        'nbformat_minor': 4,
-    }
+    """A notebook with a clear-tagged and an omit-tagged cell.
+
+    A fixture rather than a module constant because several tests append a
+    cell to it, and each of those must start from an unmodified copy.
+    """
+    return make_notebook(
+        code('# Regular code'),
+        code(
+            '#| scrub-clear:\ndef solution():\n    return 42',
+            outputs=[{'data': {'text/plain': ['42']}}],
+            execution_count=1,
+        ),
+        code("print('instructor only')", metadata={'tags': ['scrub-omit']}),
+    )
 
 
 def write(path: Path, notebook: dict) -> None:
@@ -165,15 +159,7 @@ def test_processing_stops_at_first_failing_file(tmp_path: Path, scrub_project):
     """A second, valid file entry is never reached once an earlier one fails."""
     config_path = tmp_path / '.ipynb-scrubber.toml'
     good_input = tmp_path / 'good.ipynb'
-    write(
-        good_input,
-        {
-            'cells': [{'cell_type': 'code', 'source': 'x = 1', 'metadata': {}}],
-            'metadata': {},
-            'nbformat': 4,
-            'nbformat_minor': 4,
-        },
-    )
+    write(good_input, make_notebook(code('x = 1')))
     config_path.write_text(f'''
 [[files]]
 input = "{tmp_path / 'missing.ipynb'}"
@@ -374,11 +360,10 @@ output = "{tmp_path / 'output.ipynb'}"
 def test_note_cells_with_notes_file(tmp_path: Path, sample_notebook, scrub_project):
     """A file-level notes-file entry is honored end to end."""
     sample_notebook['cells'].append(
-        {
-            'cell_type': 'code',
-            'source': '#| scrub-note: note-1\ndef note_solution():\n    return "noted"',
-            'metadata': {},
-        },
+        code(
+            '#| scrub-note: note-1\ndef note_solution():\n    return "noted"',
+            metadata={},
+        ),
     )
     input_path = tmp_path / 'input.ipynb'
     write(input_path, sample_notebook)
@@ -405,11 +390,10 @@ def test_note_cells_without_notes_file_fails(
 ):
     """A config-driven run with note cells but no notes-file is a hard error."""
     sample_notebook['cells'].append(
-        {
-            'cell_type': 'code',
-            'source': '#| scrub-note: error-test\ndef note_solution():\n    return 1',
-            'metadata': {},
-        },
+        code(
+            '#| scrub-note: error-test\ndef note_solution():\n    return 1',
+            metadata={},
+        ),
     )
     input_path = tmp_path / 'input.ipynb'
     write(input_path, sample_notebook)
@@ -430,15 +414,7 @@ output = "{tmp_path / 'output.ipynb'}"
 
 def test_unwritable_output_reports_once_without_traceback(tmp_path, scrub_project):
     notebook = tmp_path / 'in.ipynb'
-    write(
-        notebook,
-        {
-            'cells': [{'cell_type': 'code', 'metadata': {}, 'source': 'x = 1'}],
-            'metadata': {},
-            'nbformat': 4,
-            'nbformat_minor': 4,
-        },
-    )
+    write(notebook, make_notebook(code('x = 1')))
     locked = tmp_path / 'locked'
     locked.mkdir()
     locked.chmod(0o500)
@@ -461,11 +437,7 @@ def test_failed_notebook_write_leaves_no_orphan_notes_file(
 ):
     """Notes describe the exercise notebook, so they must not outlive its write."""
     sample_notebook['cells'].append(
-        {
-            'cell_type': 'code',
-            'source': '#| scrub-note: note-1\nsecret = 1',
-            'metadata': {},
-        },
+        code('#| scrub-note: note-1\nsecret = 1', metadata={}),
     )
     input_path = tmp_path / 'input.ipynb'
     write(input_path, sample_notebook)
@@ -492,11 +464,7 @@ notes-file = "{notes_file}"
 @pytest.fixture
 def note_cell():
     """A code cell that is captured to the notes file under ``note-1``."""
-    return {
-        'cell_type': 'code',
-        'source': '#| scrub-note: note-1\nsecret = 1',
-        'metadata': {},
-    }
+    return code('#| scrub-note: note-1\nsecret = 1', metadata={})
 
 
 def test_failing_entry_cancels_the_whole_batch(

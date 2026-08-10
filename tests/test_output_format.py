@@ -19,32 +19,13 @@ from ipynb_scrubber.notebook import dumps_notebook
 from ipynb_scrubber.processor import process_notebook
 from ipynb_scrubber.project import scrub_files
 
+# These tests read the bytes, so they build the schema-valid shape: a cell id,
+# and outputs/execution_count on every code cell. See builders.py.
+from tests.builders import markdown, schema_valid_code, schema_valid_notebook
+
 OPTS = ScrubbingOptions()
 
 ACCENTED = 'x = "café ☕ naïve ünïcødé"'
-
-
-def notebook(*cells, metadata=None):
-    return {
-        'cells': list(cells),
-        'metadata': {'language_info': {'name': 'python'}}
-        if metadata is None
-        else metadata,
-        'nbformat': 4,
-        'nbformat_minor': 5,
-    }
-
-
-def code(source, cell_id='c', **kw):
-    return {
-        'id': cell_id,
-        'cell_type': 'code',
-        'source': source,
-        'metadata': {},
-        'outputs': [],
-        'execution_count': None,
-        **kw,
-    }
 
 
 @pytest.mark.parametrize(
@@ -61,8 +42,8 @@ def test_output_validates_against_the_nbformat_schema(label, source):
     Removing them rather than emptying them produced a notebook that any tool
     validating its input would reject.
     """
-    nb = notebook(
-        code(
+    nb = schema_valid_notebook(
+        schema_valid_code(
             source,
             outputs=[{'output_type': 'stream', 'name': 'stdout', 'text': 'hi'}],
             execution_count=3,
@@ -75,13 +56,8 @@ def test_output_validates_against_the_nbformat_schema(label, source):
 
 def test_markdown_output_validates_against_the_nbformat_schema():
     """A markdown cell must NOT carry run results, so there they are dropped."""
-    nb = notebook(
-        {
-            'id': 'm',
-            'cell_type': 'markdown',
-            'source': '<!-- scrub-clear: -->\nanswer',
-            'metadata': {},
-        },
+    nb = schema_valid_notebook(
+        markdown('<!-- scrub-clear: -->\nanswer', id='m'),
     )
     result, _ = process_notebook(nb, OPTS)
 
@@ -90,9 +66,9 @@ def test_markdown_output_validates_against_the_nbformat_schema():
 
 def test_a_rewritten_cell_keeps_the_line_list_shape_jupyter_writes():
     """Otherwise one scrubbed cell becomes a single very long line in the diff."""
-    nb = notebook(
-        code(['#| scrub-clear:\n', 'secret()'], cell_id='a'),
-        code(['x = 1\n', 'y = 2'], cell_id='b'),
+    nb = schema_valid_notebook(
+        schema_valid_code(['#| scrub-clear:\n', 'secret()'], id='a'),
+        schema_valid_code(['x = 1\n', 'y = 2'], id='b'),
     )
     result, _ = process_notebook(nb, OPTS)
 
@@ -102,24 +78,31 @@ def test_a_rewritten_cell_keeps_the_line_list_shape_jupyter_writes():
 
 def test_serialization_does_not_escape_non_ascii():
     """Jupyter writes ensure_ascii=False; escaping is lossless but unreadable."""
-    text = dumps_notebook(notebook(code(ACCENTED)))
+    text = dumps_notebook(schema_valid_notebook(schema_valid_code(ACCENTED)))
 
     assert 'café ☕ naïve ünïcødé' in text
     assert '\\u00e9' not in text
 
 
 def test_serialization_ends_with_a_newline():
-    assert dumps_notebook(notebook(code('x = 1'))).endswith('}\n')
+    assert dumps_notebook(schema_valid_notebook(schema_valid_code('x = 1'))).endswith(
+        '}\n',
+    )
 
 
 def test_serialization_is_indented_the_way_jupyter_indents():
-    assert '\n "cells"' in dumps_notebook(notebook(code('x = 1')))
+    assert '\n "cells"' in dumps_notebook(
+        schema_valid_notebook(schema_valid_code('x = 1')),
+    )
 
 
 def test_non_ascii_survives_a_file_round_trip(tmp_path):
     source = tmp_path / 'in.ipynb'
     source.write_bytes(
-        json.dumps(notebook(code(ACCENTED)), ensure_ascii=False).encode('utf-8'),
+        json.dumps(
+            schema_valid_notebook(schema_valid_code(ACCENTED)),
+            ensure_ascii=False,
+        ).encode('utf-8'),
     )
     out = tmp_path / 'out.ipynb'
 
@@ -137,7 +120,10 @@ def test_non_ascii_survives_an_ascii_locale(tmp_path):
     """
     source = tmp_path / 'in.ipynb'
     source.write_bytes(
-        json.dumps(notebook(code(ACCENTED)), ensure_ascii=False).encode('utf-8'),
+        json.dumps(
+            schema_valid_notebook(schema_valid_code(ACCENTED)),
+            ensure_ascii=False,
+        ).encode('utf-8'),
     )
     out = tmp_path / 'out.ipynb'
     script = (
@@ -168,7 +154,7 @@ def test_non_ascii_survives_an_ascii_locale(tmp_path):
 
 def test_stdin_and_stdout_are_utf8_regardless_of_locale():
     """The CLI reads and writes bytes, so a piped notebook is not re-encoded."""
-    nb = notebook(code(ACCENTED))
+    nb = schema_valid_notebook(schema_valid_code(ACCENTED))
     result = subprocess.run(
         [sys.executable, '-m', 'ipynb_scrubber.cli', 'scrub-notebook'],
         input=json.dumps(nb, ensure_ascii=False).encode('utf-8'),
