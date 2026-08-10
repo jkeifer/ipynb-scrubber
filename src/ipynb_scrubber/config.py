@@ -184,9 +184,21 @@ class TagSpec:
     takes_text: bool
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScrubbingOptions:
-    """Scrubbing options."""
+    """Scrubbing options.
+
+    Frozen because every rule this class enforces lives in ``__post_init__``,
+    and a settable field is a way around all of them at once. Nothing checks a
+    tag name again after construction, so ``opts.omit_tag = 'no'`` would leave
+    an instance holding a name the constructor exists to reject — the option
+    written into a header and read back as a bool, under a key no lookup by
+    name finds, which for ``omit-tag`` means shipping the solution. A rule a
+    single assignment walks past is not enforcing anything.
+
+    To derive a modified copy, use ``merged_with`` or ``dataclasses.replace``:
+    both build a new instance, so both are checked exactly as construction is.
+    """
 
     clear_tag: str = 'scrub-clear'
     clear_text: str = '# TODO: Implement this'
