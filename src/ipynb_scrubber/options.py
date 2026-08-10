@@ -178,26 +178,36 @@ _UNQUOTED_COLON = 'mapping values are not allowed here'
 
 
 def _describe(error: yaml.YAMLError, text: str) -> str:
-    """Turn a YAML parse failure into advice aimed at the header's author."""
-    mark = getattr(error, 'problem_mark', None)
-    lines = text.split('\n')
+    """Turn a YAML parse failure into advice aimed at the header's author.
 
-    if mark is not None and 0 <= mark.line < len(lines):
-        if '\t' in lines[mark.line]:
-            return (
-                f'Invalid cell option header: line {mark.line + 1} contains a '
-                'tab. The header is YAML, which forbids tabs as whitespace; '
-                'indent it with spaces'
-            )
-        problem = getattr(error, 'problem', None)
-        if problem == _UNQUOTED_COLON:
-            return (
-                f'Invalid cell option header: line {mark.line + 1} has a second '
-                "':' in its value. The header is YAML, so a value containing "
-                "':' or '#' has to be quoted (name: \"Figure 1: a plot\")"
-            )
-        if problem:
-            return f'Invalid cell option header: {problem} (line {mark.line + 1})'
+    Advice needs the line the failure sits on and what YAML was unhappy about,
+    and only a ``MarkedYAMLError`` carries either. A failure YAML cannot place
+    at all — text it refused to read in the first place, say — arrives as a
+    plain ``YAMLError``, and there its own words are all there is to pass on. A
+    marked error may still carry neither mark nor problem, so each is checked
+    before it is leaned on.
+    """
+    if isinstance(error, yaml.MarkedYAMLError):
+        mark = error.problem_mark
+        lines = text.split('\n')
+
+        if mark is not None and 0 <= mark.line < len(lines):
+            if '\t' in lines[mark.line]:
+                return (
+                    f'Invalid cell option header: line {mark.line + 1} contains '
+                    'a tab. The header is YAML, which forbids tabs as '
+                    'whitespace; indent it with spaces'
+                )
+            problem = error.problem
+            if problem == _UNQUOTED_COLON:
+                return (
+                    f'Invalid cell option header: line {mark.line + 1} has a '
+                    "second ':' in its value. The header is YAML, so a value "
+                    "containing ':' or '#' has to be quoted "
+                    '(name: "Figure 1: a plot")'
+                )
+            if problem:
+                return f'Invalid cell option header: {problem} (line {mark.line + 1})'
 
     return f'Invalid cell option header: {error}'
 
