@@ -5,20 +5,24 @@ from typing import Any
 import pytest
 
 from ipynb_scrubber.exceptions import ProcessingError
-from ipynb_scrubber.options import parse_cell_options
+from ipynb_scrubber.options import Option, parse_cell_options
 
-#: The option names the tool defines, under their default spellings.
-NAMES = ('scrub-clear', 'scrub-omit', 'scrub-note')
+#: The options the tool defines, under their default spellings.
+OPTIONS = (
+    Option('scrub-clear', takes_text=True),
+    Option('scrub-omit', takes_text=False),
+    Option('scrub-note', takes_text=True),
+)
 
 
 def options(cell_type: str, source: str) -> dict[str, Any]:
     """The option mapping a cell's header carries."""
-    return parse_cell_options(cell_type, source, NAMES).options
+    return parse_cell_options(cell_type, source, OPTIONS).options
 
 
 def block_styled(cell_type: str, source: str) -> frozenset[str]:
     """The names of the options a cell's header writes as a block scalar."""
-    return parse_cell_options(cell_type, source, NAMES).block_styled
+    return parse_cell_options(cell_type, source, OPTIONS).block_styled
 
 
 def test_code_option_with_no_value_is_null() -> None:
@@ -261,15 +265,50 @@ def test_header_that_is_not_a_mapping_raises() -> None:
         options('code', '#| - scrub-omit\n#| - two')
 
 
-def test_option_without_a_colon_raises_with_a_hint() -> None:
-    """A lone name is a bare string, and the fix is the colon it is missing."""
-    with pytest.raises(ProcessingError, match=re.escape("Did you mean 'scrub-omit:'?")):
+def test_a_bare_name_is_not_an_option() -> None:
+    """An option is a mapping entry, so the colon is what names one.
+
+    Without it the name is just a string, and the header holds no options at
+    all rather than one valueless one.
+    """
+    with pytest.raises(ProcessingError, match=r"'scrub-omit' is missing its colon"):
         options('code', '#| scrub-omit\nprint("x")')
+    with pytest.raises(ProcessingError, match=r"'scrub-omit' is missing its colon"):
+        options('markdown', '<!-- scrub-omit -->\n# Solution')
+
+
+def test_a_bare_name_above_prose_names_the_missing_colon() -> None:
+    """A plain scalar swallows the line below it, so the value names nothing.
+
+    'scrub-omit' above a note to self folds into one string. What the author
+    wrote is still on the line the scalar opens on, which is where the missing
+    colon is found.
+    """
+    with pytest.raises(ProcessingError, match=r"'scrub-omit' is missing its colon"):
+        options('code', '#| scrub-omit\n#| the answer cell\nprint("x")')
+
+
+def test_a_bare_name_is_never_silently_dropped() -> None:
+    """Regression: reading one as somebody else's header ships the solution.
+
+    A colonless name offers no colon for a key-position match to find, and it
+    folds into a plain scalar that names nothing. Missing it in any of these
+    shapes means scrub-omit silently does nothing and the cell survives into
+    the exercise notebook.
+    """
+    for source in (
+        '#| scrub-omit\nSECRET = 1',
+        '#| scrub-omit\n#| echo: false\nSECRET = 1',
+        '#| echo: false\n#| scrub-omit\nSECRET = 1',
+        '#| scrub-omit\n#| the answer cell\nSECRET = 1',
+    ):
+        with pytest.raises(ProcessingError):
+            options('code', source)
 
 
 def test_non_text_option_name_raises() -> None:
     with pytest.raises(ProcessingError, match='option names must be text'):
-        options('code', '#| 12: hello')
+        options('code', '#| scrub-clear: hello\n#| 12: hello')
 
 
 def test_tab_in_the_indentation_raises_a_targeted_error() -> None:
@@ -373,14 +412,28 @@ def test_a_divider_comment_yields_no_options() -> None:
     assert options('code', '#|-----\nprint("x")') == {}
 
 
-def test_an_unreadable_header_the_tool_does_not_own_yields_no_options() -> None:
-    """The header is shared, so a neighbour's syntax is not this tool's to judge."""
-    assert options('code', '#| fig-cap: A: B\nprint("x")') == {}
+@pytest.mark.parametrize(
+    'source',
+    [
+        '#| scrub-clear: A: B\nprint("x")',
+        '#| fig-cap: A: B\nprint("x")',
+        '#| my-scrub-omit-helper: A: B\nprint("x")',
+        '#| fig-cap: see scrub-note docs: really\nprint("x")',
+        '#| scrub-omit\n#| echo: false\nprint("x")',
+    ],
+)
+def test_an_unreadable_header_always_raises(source: str) -> None:
+    """Whose header it is cannot be known, so the run does not guess.
 
-
-def test_an_unreadable_header_naming_a_scrubber_option_raises() -> None:
+    Without a node graph there is nothing to read ownership off. Matching the
+    raw text instead would claim headers that merely look like this tool's —
+    a name inside a longer key, or in a neighbour's prose — and staying quiet
+    would leave a cell this tool was told to scrub in the output. The header is
+    YAML and Quarto reads the same block as YAML, so text this malformed is
+    broken for whoever else writes here too.
+    """
     with pytest.raises(ProcessingError, match='Invalid cell option header'):
-        options('code', '#| scrub-clear: A: B\nprint("x")')
+        options('code', source)
 
 
 def test_a_non_mapping_header_the_tool_does_not_own_yields_no_options() -> None:
@@ -391,3 +444,61 @@ def test_an_option_name_yaml_cannot_use_as_a_key_raises() -> None:
     """A sequence is well-formed YAML but cannot name an option."""
     with pytest.raises(ProcessingError, match='Invalid cell option header'):
         options('code', '#| ? [scrub-omit, other]\n#| : x')
+
+
+def test_a_non_text_name_the_tool_does_not_own_is_left_alone() -> None:
+    """The header names no scrubber option, so its keys are not this tool's."""
+    assert options('code', '#| 12: hello') == {}
+
+
+def test_a_repeated_name_the_tool_does_not_own_is_left_alone() -> None:
+    """Whether a neighbour may repeat its own option is not this tool's call.
+
+    The header yields nothing rather than failing the run. That it yields
+    nothing at all, rather than the surviving value, does not matter: this tool
+    never reads a name it does not define.
+    """
+    assert options('code', '#| fig-cap: a\n#| fig-cap: b\nprint("x")') == {}
+
+
+def test_a_longer_name_containing_a_scrubber_name_is_not_owned() -> None:
+    """'my-scrub-omit-helper' is somebody else's option, not scrub-omit.
+
+    Ownership comes off the parsed keys, so a name is claimed only where one
+    was written and not merely where the characters appear.
+    """
+    assert options('code', '#| my-scrub-omit-helper: false\nprint("x")') == {
+        'my-scrub-omit-helper': False,
+    }
+
+
+def test_a_scrubber_name_inside_a_foreign_value_is_not_owned() -> None:
+    """A key names an option; a name in somebody else's value does not."""
+    assert options('code', '#| fig-cap: see scrub-note docs\nprint("x")') == {
+        'fig-cap': 'see scrub-note docs',
+    }
+
+
+def test_a_repeated_entry_in_a_mapping_option_raises() -> None:
+    """Everything under an option's name is that option's instruction too."""
+    source = '#| scrub-note:\n#|   id: a\n#|   id: b\nprint("x")'
+    with pytest.raises(ProcessingError, match=r"Duplicate option 'scrub-note.id'"):
+        options('code', source)
+
+
+def test_a_comment_beside_an_option_that_takes_no_value_is_left_alone() -> None:
+    """scrub-omit carries no value, so a comment cannot cut one short."""
+    assert options('code', '#| scrub-omit: # drop the answer\nprint("x")') == {
+        'scrub-omit': None,
+    }
+
+
+def test_an_unquoted_colon_in_a_value_names_the_quoting_fix() -> None:
+    """A caption carrying a colon is the likeliest way a header stops parsing.
+
+    YAML's own words for it name the mechanism, not the remedy. Quarto reads
+    the same header under the same rules and tells authors to quote the value,
+    so this does too.
+    """
+    with pytest.raises(ProcessingError, match=r"has a second ':' in its value"):
+        options('code', '#| fig-cap: Figure 1: Temperature\nprint("x")')
