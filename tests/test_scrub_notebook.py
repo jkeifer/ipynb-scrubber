@@ -1,10 +1,12 @@
 import json
+import subprocess
+import sys
 
 
 def test_invalid_json_input_exits_nonzero(scrub_notebook):
     result = scrub_notebook(input_data='not json')
     assert result.returncode == 1
-    assert 'Invalid JSON input' in result.stderr
+    assert 'Invalid notebook JSON' in result.stderr
     assert 'Traceback' not in result.stderr
 
 
@@ -94,6 +96,47 @@ def test_notes_file_is_not_written_when_processing_fails(
     result = scrub_notebook('--notes-file', str(notes), input_data=json.dumps(nb))
     assert result.returncode == 1
     assert not notes.exists()
+
+
+def test_failed_notebook_write_leaves_no_orphan_notes_file(
+    tmp_path,
+    make_notebook,
+    code,
+):
+    """Notes describe the exercise notebook, so they must not outlive its write.
+
+    stdout is handed a descriptor opened for reading, so every write to it
+    fails the way writing into a pipe whose reader has gone away fails. This
+    runs its own subprocess rather than using the fixture because the fixture
+    captures stdout, and capturing it is precisely what must not happen here.
+    """
+    nb = make_notebook(code('#| scrub-note: ex-1\nsecret = 1'))
+    notes = tmp_path / 'notes.md'
+    sink = tmp_path / 'sink'
+    sink.touch()
+
+    with sink.open('rb') as read_only:
+        result = subprocess.run(
+            [
+                sys.executable,
+                '-m',
+                'ipynb_scrubber.cli',
+                'scrub-notebook',
+                '--notes-file',
+                str(notes),
+            ],
+            input=json.dumps(nb),
+            text=True,
+            stdout=read_only,
+            stderr=subprocess.PIPE,
+        )
+
+    # Not `== 1`: the notebook is still sitting in stdout's buffer when the
+    # interpreter shuts down, and CPython exits 120 when it cannot flush there.
+    assert result.returncode != 0
+    assert 'Error: Error writing output' in result.stderr
+    # Neither the notes file nor the temporary it was staged as.
+    assert [p.name for p in tmp_path.iterdir()] == ['sink']
 
 
 def test_no_command_exits_two(scrubber):

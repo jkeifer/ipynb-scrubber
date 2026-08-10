@@ -2,7 +2,7 @@ import re
 
 from pathlib import Path
 
-from .exceptions import ScrubberError
+from .exceptions import MissingNotesDestinationError
 
 #: Fence info string for notebooks that declare no kernel language.
 DEFAULT_NOTE_LANGUAGE = 'python'
@@ -63,23 +63,20 @@ def render_notes(notes_dict: dict[str, str], language: str | None = None) -> str
 
 
 def require_destination(
-    notes: dict[str, str],
+    note_count: int,
     destination: Path | None,
     note_tag: str,
-    remedy: str,
 ) -> None:
     """Refuse to emit notes that have nowhere to go.
 
     The exercise notebook refers to each noted cell by id, so writing it without
     somewhere to put the notes leaves every one of those references dangling.
-    Both front ends enforce this, and they differ only in how their caller says
-    where the notes should go, which is what ``remedy`` carries.
+    That is one rule, enforced here rather than remembered by each front end.
 
     Raises:
-        ScrubberError: If notes were collected and ``destination`` is None.
+        MissingNotesDestinationError: If notes were collected and ``destination``
+            is None. The caller is expected to catch it and say how a
+            destination is named where it is being called from.
     """
-    if notes and destination is None:
-        raise ScrubberError(
-            f'Found {len(notes)} cell(s) with note tag "{note_tag}", but '
-            f'nowhere to save the notes. {remedy}',
-        )
+    if note_count and destination is None:
+        raise MissingNotesDestinationError(note_count, note_tag)

@@ -141,16 +141,3 @@ def commit_all(staged: Iterable[StagedFile]) -> None:
         commit(items)
     finally:
         discard(items)
-
-
-def write_atomic(final: Path, content: str) -> None:
-    """Write ``final`` in its entirety or not at all.
-
-    Args:
-        final: The path to write.
-        content: The whole content to write.
-
-    Raises:
-        OSError: If the content cannot be written or moved into place.
-    """
-    commit_all([stage(final, content)])

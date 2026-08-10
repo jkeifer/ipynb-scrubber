@@ -1,5 +1,4 @@
 import argparse
-import json
 import sys
 
 from collections.abc import Sequence
@@ -7,12 +6,11 @@ from pathlib import Path
 from typing import Any, ClassVar, NoReturn, Protocol
 
 from .config import ProjectConfig, ScrubbingOptions
-from .exceptions import ScrubberError
-from .notebook import dumps_notebook, get_notebook_language, loads_notebook
-from .notes import render_notes, require_destination
-from .processor import process_notebook
+from .exceptions import MissingNotesDestinationError, ScrubberError
+from .notes import require_destination
+from .processor import scrub
 from .project import scrub_files
-from .staging import write_atomic
+from .staging import StagedFile, commit_all, discard, stage
 
 _DEFAULTS = ScrubbingOptions()
 
@@ -88,7 +86,10 @@ class ScrubNotebook:
         'from the exercise version, while those tagged '
         'with the clear tag are cleared and a message '
         'is added to indicate they are to be completed '
-        'by the user.'
+        'by the user. A notes file, if one is asked for, '
+        'is written only once the exercise notebook has '
+        'reached stdout, so it never describes a notebook '
+        'that was never delivered.'
     )
     name = 'scrub-notebook'
 
@@ -111,17 +112,6 @@ class ScrubNotebook:
 
     def __call__(self, args: argparse.Namespace) -> int:
         try:
-            try:
-                # Read the raw bytes: a notebook's encoding is a property of
-                # the notebook, not of the locale the tool happens to run in.
-                notebook = loads_notebook(sys.stdin.buffer.read())
-            except json.JSONDecodeError as e:
-                raise ScrubberError(f'Invalid JSON input: {e}') from e
-            except (OSError, UnicodeDecodeError) as e:
-                # A mis-encoded byte on stdin is bad input like any other, so
-                # it earns the friendly contract rather than a traceback.
-                raise ScrubberError(f'Error reading input: {e}') from e
-
             options = ScrubbingOptions(
                 **{
                     spec.field: getattr(args, spec.field)
@@ -129,36 +119,48 @@ class ScrubNotebook:
                 },
             )
 
-            processed_notebook, notes_dict = process_notebook(notebook, options)
+            try:
+                # Read the raw bytes: a notebook's encoding is a property of
+                # the notebook, not of the locale the tool happens to run in.
+                data = sys.stdin.buffer.read()
+            except OSError as e:
+                raise ScrubberError(f'Error reading input: {e}') from e
 
-            require_destination(
-                notes_dict,
-                args.notes_file,
-                options.note_tag,
-                'Pass --notes-file PATH.',
-            )
+            result = scrub(data, options)
 
-            if notes_dict:
+            notes_file = args.notes_file
+            try:
+                require_destination(result.note_count, notes_file, options.note_tag)
+            except MissingNotesDestinationError as e:
+                raise ScrubberError(f'{e} Pass --notes-file PATH.') from e
+
+            staged: list[StagedFile] = []
+            try:
+                if result.notes_text is not None:
+                    try:
+                        staged.append(stage(notes_file, result.notes_text))
+                    except OSError as e:
+                        raise ScrubberError(f'Error writing notes file: {e}') from e
+
                 try:
-                    write_atomic(
-                        args.notes_file,
-                        render_notes(
-                            notes_dict,
-                            get_notebook_language(processed_notebook),
-                        ),
-                    )
+                    # Bytes again, for the same reason as stdin: the output
+                    # encoding belongs to the notebook, not to the terminal it
+                    # is piped into.
+                    sys.stdout.buffer.write(result.notebook_text.encode('utf-8'))
+                    sys.stdout.buffer.flush()
+                except OSError as e:
+                    raise ScrubberError(f'Error writing output: {e}') from e
+
+                # Committed only now: notes are worth having only alongside the
+                # notebook they annotate, so a consumer that went away mid-write
+                # must not be left a notes file describing what it never got.
+                try:
+                    commit_all(staged)
                 except OSError as e:
                     raise ScrubberError(f'Error writing notes file: {e}') from e
-
-            try:
-                # Bytes again, for the same reason as stdin: the output encoding
-                # belongs to the notebook, not to the terminal it is piped into.
-                sys.stdout.buffer.write(
-                    dumps_notebook(processed_notebook).encode('utf-8'),
-                )
-                sys.stdout.buffer.flush()
-            except OSError as e:
-                raise ScrubberError(f'Error writing output: {e}') from e
+            except BaseException:
+                discard(staged)
+                raise
 
         except ScrubberError as e:
             printe(f'Error: {e}')

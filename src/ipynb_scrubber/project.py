@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import json
-
 from typing import TYPE_CHECKING
 
-from .exceptions import ScrubberError
-from .notebook import dumps_notebook, get_notebook_language, loads_notebook
-from .notes import render_notes, require_destination
-from .processor import process_notebook
+from .exceptions import MissingNotesDestinationError, ScrubberError
+from .notes import require_destination
+from .processor import scrub
 from .staging import StagedFile, commit_all, discard, stage
 
 if TYPE_CHECKING:
@@ -57,33 +54,24 @@ def stage_file(entry: FileEntry) -> list[StagedFile]:
         raise ScrubberError(f'Input file not found: {entry.input}')
 
     try:
-        notebook = loads_notebook(entry.input.read_bytes())
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise ScrubberError(f'Invalid JSON in {entry.input}: {e}') from e
+        data = entry.input.read_bytes()
     except OSError as e:
         raise ScrubberError(f'Error reading {entry.input}: {e}') from e
 
-    processed_notebook, notes = process_notebook(notebook, entry.options)
+    result = scrub(data, entry.options)
 
     notes_file = entry.notes_file
-    require_destination(
-        notes,
-        notes_file,
-        entry.options.note_tag,
-        'Set notes-file for this entry in the config.',
-    )
+    try:
+        require_destination(result.note_count, notes_file, entry.options.note_tag)
+    except MissingNotesDestinationError as e:
+        raise ScrubberError(f'{e} Set notes-file for this entry in the config.') from e
 
     staged: list[StagedFile] = []
     try:
-        staged.append(_stage(entry.output, dumps_notebook(processed_notebook)))
+        staged.append(_stage(entry.output, result.notebook_text))
 
-        if notes and notes_file is not None:
-            staged.append(
-                _stage(
-                    notes_file,
-                    render_notes(notes, get_notebook_language(processed_notebook)),
-                ),
-            )
+        if result.notes_text is not None and notes_file is not None:
+            staged.append(_stage(notes_file, result.notes_text))
     except BaseException:
         discard(staged)
         raise

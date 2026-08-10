@@ -291,7 +291,9 @@ from ipynb_scrubber import (
     ProjectConfig,
     ScrubberError,
     ScrubbingOptions,
+    ScrubResult,
     process_notebook,
+    scrub,
     scrub_files,
 )
 ```
@@ -319,6 +321,27 @@ below that cell's option header.
 `ScrubbingOptions` carries the same five settings as the CLI flags, so
 `ScrubbingOptions(clear_text='# YOUR CODE HERE')` mirrors
 `--clear-text '# YOUR CODE HERE'`.
+
+### Scrubbing a notebook end to end
+
+`scrub` is the whole pipeline both commands run — parse, process, render —
+without touching a single file. It takes the raw bytes of a notebook and
+returns a `ScrubResult` holding the text of every output:
+
+```python
+from ipynb_scrubber import ScrubbingOptions, scrub
+
+result = scrub(Path('lecture.ipynb').read_bytes(), ScrubbingOptions())
+
+result.notebook_text  # the exercise notebook, serialized as Jupyter writes it
+result.notes_text     # the rendered notes, or None if no cell was noted
+result.note_count     # how many cells were noted
+```
+
+Bytes rather than text, because a notebook's encoding is a property of the
+notebook rather than of the locale the program happens to run in. Where the
+results go is yours to decide; if you want them written for you, use
+`scrub_files`.
 
 ### Running a config
 
@@ -789,6 +812,11 @@ Scrubbing a note cell replaces its body with a `# (See notes: <id>)` pointer, so
 producing the exercise notebook without the notes file it points at would leave
 that reference dangling.
 
+**The notes file never outlives its notebook.** Both commands write it last:
+`scrub-notebook` commits it only once the exercise notebook has reached stdout,
+and `scrub-project` commits it as part of the batch. A run that fails to deliver
+the notebook leaves no notes file behind describing one nobody received.
+
 **The note is the cell's content below the header, not the header itself.** The
 header is an instruction to this tool rather than part of the cell, and a
 `scrub-note` carrying `text` holds the very scaffolding the student is meant to
@@ -948,9 +976,11 @@ print('Exercise: implement the functions below')
 - **Outputs are written atomically**: Each file is written beside its target and
   moved into place once complete, so no output is ever seen half-written. A
   `scrub-project` run stages every file first and commits only once all of them
-  have succeeded, so a failing entry cancels the whole batch. Committing several
-  files is several moves rather than one transaction, so an interruption during
-  the commit itself can leave some entries written
+  have succeeded, so a failing entry cancels the whole batch. A `scrub-notebook`
+  run stages its notes file and commits it only once the exercise notebook has
+  reached stdout, so notes never outlive the notebook they annotate. Committing
+  several files is several moves rather than one transaction, so an interruption
+  during the commit itself can leave some entries written
 - **Error handling**: A problem with a notebook, a config or a cell's options is
   reported as a short message with a non-zero exit status. Anything else is a
   defect in this tool and surfaces as a traceback

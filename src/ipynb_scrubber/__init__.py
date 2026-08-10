@@ -3,7 +3,7 @@
 from .config import FileEntry, ProjectConfig, ScrubbingOptions
 from .exceptions import InvalidNotebookError, ProcessingError, ScrubberError
 from .notebook import Cell, Notebook
-from .processor import process_notebook
+from .processor import ScrubResult, process_notebook, scrub
 from .project import scrub_files
 
 __all__ = [
@@ -13,8 +13,10 @@ __all__ = [
     'Notebook',
     'ProcessingError',
     'ProjectConfig',
+    'ScrubResult',
     'ScrubberError',
     'ScrubbingOptions',
     'process_notebook',
+    'scrub',
     'scrub_files',
 ]
