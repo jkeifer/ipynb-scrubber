@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any, assert_never
 
-from .config import ScrubbingOptions, reject_unknown_keys
+from .config import ScrubbingOptions, TagSpec, reject_unknown_keys
 from .exceptions import ProcessingError, ScrubberError
 from .notebook import Cell, get_cell_source, to_cell_source
 from .options import Header, Option, parse_cell_options
@@ -52,6 +52,34 @@ CellRewrite = Keep | Clear | Note
 CellAction = Omit | CellRewrite
 
 
+@dataclass(frozen=True)
+class _Marked:
+    """A cell an option was found on, as the builders below need to see it.
+
+    Every builder answers the same question — what does this option, on this
+    cell, mean? — and each needs a different part of what surrounds the option
+    to answer it: how it was written, what kind of cell carries it, and what
+    that cell holds once its option header is taken off. Handing all of it over
+    as one value is what lets the builders share a signature, and so what lets
+    the precedence order below be data rather than a run of near-identical
+    branches. A builder reading only part of this is reading the part its own
+    option turns on, not ignoring parameters it was made to accept.
+    """
+
+    opts: ScrubbingOptions
+    cell_type: str
+    #: The names the cell carries as metadata tags. A tag is presence and
+    #: nothing else, and not every option may be written that way, so a builder
+    #: can still tell which spelling its option arrived in.
+    tags: frozenset[str]
+    header: Header
+
+
+#: How an option's value becomes the action it describes. One signature across
+#: every option is what makes the precedence order below a table.
+_Build = Callable[[Any, _Marked], CellAction]
+
+
 def _replacement_text(name: str, value: Any, default: str) -> str:
     """The replacement text an option carries; ``default`` when it carries none.
 
@@ -85,21 +113,41 @@ def _note_id(value: Any, opts: ScrubbingOptions) -> str:
     )
 
 
-def _note_action(
-    value: Any,
-    opts: ScrubbingOptions,
-    body: str,
-    kept: str,
-) -> Note:
+def _note_action(value: Any, marked: _Marked) -> Note:
     """Build the Note described by a ``scrub-note`` option's value.
 
     The value is either the note id on its own, or a mapping carrying ``id``
     and an optional ``text`` to leave in the cleared cell.
 
+    Two spellings are refused before any of that is read. A metadata tag
+    carries presence and nothing else, so it has nowhere to put the id a note
+    is filed under, and the message names the source-header spelling that does.
+    A non-code cell is refused because the body a note files away is written
+    back as source in the notebook's language, which a markdown cell's content
+    is not.
+
     Raises:
-        ProcessingError: If the id is unusable, the text is not a string, or
-            the mapping carries a key the option does not define.
+        ProcessingError: If the option was written as a metadata tag, if the
+            cell is not a code cell, if the id is unusable, if the text is not
+            a string, or if the mapping carries a key the option does not
+            define.
     """
+    opts = marked.opts
+
+    if opts.note_tag in marked.tags:
+        raise ProcessingError(
+            f"Option '{opts.note_tag}' is not supported as a cell tag; "
+            f"write '#| {opts.note_tag}: <id>' in a code cell's source",
+        )
+
+    if marked.cell_type != 'code':
+        raise ProcessingError(
+            f"Option '{opts.note_tag}' is only supported on code cells",
+        )
+
+    body = marked.header.body
+    kept = marked.header.kept
+
     if not isinstance(value, dict):
         return Note(_note_id(value, opts), opts.clear_text, body, kept)
 
@@ -123,13 +171,16 @@ def _note_action(
 def _scrubber_options(opts: ScrubbingOptions) -> tuple[Option, ...]:
     """The options this tool defines, under their configured spellings.
 
-    ``takes_text`` is what tells the parser whose values a YAML comment could
-    silently eat. ``scrub-omit`` carries no value, so it has none to lose.
+    Which options are tags, and whether each takes text, is read off the config
+    registry rather than listed again here: an option the parser never hears
+    about is one whose value a YAML comment could silently eat, and one this
+    tool would then go on to ignore. ``takes_text`` is what tells the parser
+    whose values are at risk that way; ``scrub-omit`` carries no value, so it
+    has none to lose.
     """
-    return (
-        Option(opts.clear_tag, takes_text=True),
-        Option(opts.omit_tag, takes_text=False),
-        Option(opts.note_tag, takes_text=True),
+    return tuple(
+        Option(getattr(opts, tag.field), tag.takes_text)
+        for tag in ScrubbingOptions.tags().values()
     )
 
 
@@ -189,7 +240,7 @@ def _default_clear_text(cell_type: str, opts: ScrubbingOptions) -> str:
     return opts.clear_text_markdown if cell_type == 'markdown' else opts.clear_text
 
 
-def _omit_action(value: Any, opts: ScrubbingOptions) -> Omit:
+def _omit_action(value: Any, marked: _Marked) -> Omit:
     """Build the Omit a ``scrub-omit`` option describes.
 
     Presence is the whole signal the option carries, so a value means the
@@ -200,9 +251,74 @@ def _omit_action(value: Any, opts: ScrubbingOptions) -> Omit:
     """
     if value is not None:
         raise ProcessingError(
-            f"Option '{opts.omit_tag}' takes no value, but got {value!r}",
+            f"Option '{marked.opts.omit_tag}' takes no value, but got {value!r}",
         )
     return Omit()
+
+
+def _clear_action(value: Any, marked: _Marked) -> Clear:
+    """Build the Clear a ``scrub-clear`` option describes.
+
+    The option's value is the replacement text the cell is left holding. An
+    option carrying none leaves behind the default for the kind of cell it
+    marks, which is why the cell type is consulted here rather than settled
+    once in the options.
+
+    Raises:
+        ProcessingError: If the value is present but is not text.
+    """
+    return Clear(
+        _replacement_text(
+            marked.opts.clear_tag,
+            value,
+            _default_clear_text(marked.cell_type, marked.opts),
+        ),
+        marked.header.kept,
+    )
+
+
+#: The order the options a cell carries are considered in, named by the config
+#: key naming each. The set of options is the config's to state and this order
+#: is not: which options can be configured is a fact about configuration, while
+#: which one wins on a cell carrying two is a fact about what scrubbing means.
+#: Omit comes first because dropping a cell subsumes every rewrite of it, and
+#: note before clear because a note is a clear that also files away what it
+#: removed.
+_PRECEDENCE_ORDER: tuple[tuple[str, _Build], ...] = (
+    ('omit-tag', _omit_action),
+    ('note-tag', _note_action),
+    ('clear-tag', _clear_action),
+)
+
+
+def _precedence(
+    order: Collection[tuple[str, _Build]],
+) -> tuple[tuple[TagSpec, _Build], ...]:
+    """``order`` resolved against the registry, refusing an order that is not it.
+
+    The two halves of the split above are checked against each other here, on
+    import, so a tag that gains a place in the registry and not in this order
+    is a traceback rather than a notebook: an option left out of the order is
+    parsed out of a header, checked for ambiguity, and then quietly ignored,
+    which for a tag meaning "omit" means shipping the solution.
+
+    Raises:
+        RuntimeError: If ``order`` does not name every registered tag exactly
+            once.
+    """
+    tags = ScrubbingOptions.tags()
+    named = sorted(key for key, _ in order)
+
+    if named != sorted(tags):
+        raise RuntimeError(
+            'Every scrubber tag needs a place in the precedence order, and '
+            f'only tags belong in it: registered {sorted(tags)}, ordered {named}',
+        )
+
+    return tuple((tags[key], build) for key, build in order)
+
+
+_PRECEDENCE = _precedence(_PRECEDENCE_ORDER)
 
 
 def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
@@ -218,8 +334,11 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     A tag carries presence and nothing else, which is exactly what an option
     written with no value carries, so the two spellings merge into one mapping
     and a single precedence order covers both. The header wins where both name
-    the same option, and the order is the documented one: omit, then note, then
-    clear.
+    the same option, because ``header.options`` is merged over the tags. The
+    order is ``_PRECEDENCE_ORDER``'s, which is to say the documented one: omit,
+    then note, then clear. Walking a table rather than a chain of branches is
+    what keeps the order something stated once and read here, instead of
+    something that emerges from which ``if`` happens to be written first.
 
     Raises:
         ProcessingError: If the cell's options are malformed, misplaced, or
@@ -234,37 +353,12 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
     _check_one_scrubber_option(header, scrubber_options)
 
     cell_options: dict[str, Any] = {**dict.fromkeys(tags), **header.options}
+    marked = _Marked(opts, cell_type, frozenset(tags), header)
 
-    if opts.omit_tag in cell_options:
-        return _omit_action(cell_options[opts.omit_tag], opts)
-
-    if opts.note_tag in tags:
-        raise ProcessingError(
-            f"Option '{opts.note_tag}' is not supported as a cell tag; "
-            f"write '#| {opts.note_tag}: <id>' in a code cell's source",
-        )
-
-    if opts.note_tag in cell_options:
-        if cell_type != 'code':
-            raise ProcessingError(
-                f"Option '{opts.note_tag}' is only supported on code cells",
-            )
-        return _note_action(
-            cell_options[opts.note_tag],
-            opts,
-            header.body,
-            header.kept,
-        )
-
-    if opts.clear_tag in cell_options:
-        return Clear(
-            _replacement_text(
-                opts.clear_tag,
-                cell_options[opts.clear_tag],
-                _default_clear_text(cell_type, opts),
-            ),
-            header.kept,
-        )
+    for tag, build in _PRECEDENCE:
+        name = getattr(opts, tag.field)
+        if name in cell_options:
+            return build(cell_options[name], marked)
 
     return Keep()
 
