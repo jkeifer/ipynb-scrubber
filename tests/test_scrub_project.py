@@ -681,7 +681,7 @@ def test_commit_failure_removes_staged_files(
 
     # The rename itself, so commit_all's cleanup still runs -- that cleanup is
     # exactly what this test is checking.
-    monkeypatch.setattr(staging, 'commit', boom)
+    monkeypatch.setattr(staging, '_commit', boom)
 
     with pytest.raises(ScrubberError, match='Error writing output'):
         project.scrub_files(

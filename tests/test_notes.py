@@ -86,7 +86,7 @@ def test_a_file_that_cannot_be_moved_into_place_leaves_no_temp_file(
     def boom(staged):
         raise OSError('rename failed')
 
-    monkeypatch.setattr(staging, 'commit', boom)
+    monkeypatch.setattr(staging, '_commit', boom)
 
     with pytest.raises(OSError, match='rename failed'):
         write(tmp_path / 'notes.md', render_notes({'ex-1': 'x = 1'}))
