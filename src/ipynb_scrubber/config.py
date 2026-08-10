@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 
 from collections.abc import Collection
@@ -8,6 +9,12 @@ from pathlib import Path
 from typing import Any, ClassVar, Self
 
 from .exceptions import ScrubberError
+
+#: What an option name may look like. A name is written as a YAML key in a
+#: cell's option header, so it has to survive that round trip as itself: no
+#: leading indicator character, no whitespace, nothing YAML would quote or
+#: resolve to another type.
+TAG_NAME = re.compile(r'[A-Za-z][A-Za-z0-9_-]*')
 
 
 def reject_unknown_keys(
@@ -130,17 +137,35 @@ class ScrubbingOptions:
     }
 
     def __post_init__(self) -> None:
-        """Reject tag names that collide.
+        """Reject tag names that are unusable or that collide.
 
-        The three tags are matched as a set, so two spellings that are equal
-        collapse into one and whichever behaviour loses the precedence order
-        silently disappears. This also runs for ``replace()``, so a per-file
-        override that collides with an inherited tag is caught too.
+        A tag is written as a YAML key in a cell's option header and as a
+        metadata tag, so it has to be something YAML reads back as the same
+        plain string and a reader can pick out of a comment.
+
+        The three tags are also matched as a set, so two spellings that are
+        equal collapse into one and whichever behaviour loses the precedence
+        order silently disappears. Both checks run for ``replace()`` too, so a
+        per-file override that breaks either rule is caught as well.
 
         Raises:
-            ScrubberError: If the three tags are not all distinct.
+            ScrubberError: If a tag is not a usable name, or if the three are
+                not all distinct.
         """
-        tags = (self.clear_tag, self.omit_tag, self.note_tag)
+        named = {
+            'clear-tag': self.clear_tag,
+            'omit-tag': self.omit_tag,
+            'note-tag': self.note_tag,
+        }
+
+        for key, name in named.items():
+            if not TAG_NAME.fullmatch(name):
+                raise ScrubberError(
+                    f'{key} must start with a letter and contain only letters, '
+                    f'digits, hyphens and underscores, but got {name!r}',
+                )
+
+        tags = tuple(named.values())
         if len(set(tags)) != len(tags):
             raise ScrubberError(
                 'clear-tag, omit-tag and note-tag must all be distinct, but '
