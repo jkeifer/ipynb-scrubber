@@ -135,7 +135,7 @@ def test_input_notebook_is_untouched_after_a_mid_notebook_error():
 def test_notes_capture_original_source_before_clearing():
     nb = notebook(('code', '#| scrub-note: ex-1\nSOLUTION = 1'))
     result, notes = process_notebook(nb, OPTS)
-    assert notes == {'ex-1': '#| scrub-note: ex-1\nSOLUTION = 1'}
+    assert notes == {'ex-1': 'SOLUTION = 1'}
     assert result['cells'][0]['source'] == f'# (See notes: ex-1)\n{OPTS.clear_text}'
 
 
@@ -180,7 +180,7 @@ def test_list_form_source_is_joined(make_notebook, code):
     """
     nb = make_notebook(code(['#| scrub-note: ex-1\n', 'line one\n', 'line two']))
     _, notes = process_notebook(nb, OPTS)
-    assert notes['ex-1'] == '#| scrub-note: ex-1\nline one\nline two'
+    assert notes['ex-1'] == 'line one\nline two'
 
 
 def test_notes_file_fences_content_as_python(tmp_path):
@@ -596,9 +596,7 @@ def test_note_cell_captures_original_and_clears(make_notebook, code):
     )
     result, notes = process_notebook(nb, OPTS)
 
-    assert notes['exercise-1'] == (
-        '#| scrub-note: exercise-1\ndef solution():\n    return 42'
-    )
+    assert notes['exercise-1'] == 'def solution():\n    return 42'
     assert result['cells'][0]['source'] == (
         f'# (See notes: exercise-1)\n{OPTS.clear_text}'
     )
@@ -702,9 +700,7 @@ def test_note_cell_with_custom_note_tag(make_notebook, code):
     )
     opts = ScrubbingOptions(note_tag='solution-note')
     result, notes = process_notebook(nb, opts)
-    assert notes['custom-id'] == (
-        '#| solution-note: custom-id\ndef custom_solution():\n    return 1'
-    )
+    assert notes['custom-id'] == 'def custom_solution():\n    return 1'
     assert result['cells'][0]['source'] == (
         f'# (See notes: custom-id)\n{opts.clear_text}'
     )
@@ -788,4 +784,74 @@ def test_notes_fence_follows_the_notebook_language(tmp_path, code):
     _, notes = process_notebook(nb, OPTS)
     out = tmp_path / 'notes.md'
     write_notes_file(notes, out, get_notebook_language(nb))
-    assert '```r\n#| scrub-note: ex-1\nx <- 1\n```' in out.read_text()
+    assert '```r\nx <- 1\n```' in out.read_text()
+
+
+def test_note_body_excludes_the_option_header(make_notebook, code):
+    """The note saves the cell's content, not the instruction that marked it.
+
+    A scrub-note carrying replacement text holds the very scaffolding the
+    student is meant to fill in. Keeping the header would file that prompt in
+    the notes directly above the answer it is a prompt for.
+    """
+    source = '\n'.join(
+        [
+            '#| scrub-note:',
+            '#|   id: cell13',
+            '#|   text: |',
+            '#|     value_offset = <OFFSET>',
+            '#| echo: false',
+            'value_offset = -0.1',
+            'value_scale = 0.0001',
+        ],
+    )
+    _, notes = process_notebook(make_notebook(code(source)), OPTS)
+
+    assert notes == {'cell13': 'value_offset = -0.1\nvalue_scale = 0.0001'}
+    assert '#|' not in notes['cell13']
+    assert '<OFFSET>' not in notes['cell13']
+
+
+def test_foreign_options_survive_a_cleared_cell(make_notebook, code):
+    """'#| echo: false' configures the cell that remains, so it must remain too.
+
+    The header is shared with Quarto. Replacing a cell's content is no reason
+    to drop a neighbour's directive from it: doing so silently changes how the
+    exercise notebook renders.
+    """
+    source = '#| echo: false\n#| scrub-clear: fill me in\n#| fig-cap: A plot\nX = 1'
+    result, _ = process_notebook(make_notebook(code(source)), OPTS)
+
+    assert result['cells'][0]['source'] == (
+        '#| echo: false\n#| fig-cap: A plot\nfill me in'
+    )
+
+
+def test_foreign_options_survive_a_noted_cell(make_notebook, code):
+    """A block scalar's content goes with the option that opened it, not beyond."""
+    source = '\n'.join(
+        [
+            '#| scrub-note:',
+            '#|   id: ex-1',
+            '#|   text: |',
+            '#|     value_offset = <OFFSET>',
+            '#| echo: false',
+            'value_offset = -0.1',
+        ],
+    )
+    result, notes = process_notebook(make_notebook(code(source)), OPTS)
+
+    # '|' clips: it keeps one trailing newline only because a header line
+    # follows the block. The same block written last would have none.
+    assert result['cells'][0]['source'] == (
+        '#| echo: false\n# (See notes: ex-1)\nvalue_offset = <OFFSET>\n'
+    )
+    assert notes == {'ex-1': 'value_offset = -0.1'}
+
+
+def test_a_cell_with_no_foreign_options_gains_no_header(make_notebook, code):
+    result, _ = process_notebook(
+        make_notebook(code('#| scrub-clear: fill me in\nX = 1')),
+        OPTS,
+    )
+    assert result['cells'][0]['source'] == 'fill me in'
