@@ -3,7 +3,7 @@ from typing import Any
 from .actions import Note, Omit, apply, decide
 from .config import ScrubbingOptions
 from .exceptions import ProcessingError, ScrubberError
-from .notebook import Cell, Notebook, get_cell_source, validate_notebook
+from .notebook import Cell, Notebook, validate_notebook
 
 
 def process_notebook(
@@ -50,7 +50,7 @@ def process_notebook(
                         f'by cell {claimed_by[0]}. Note ids '
                         'must be unique within a notebook',
                     )
-                notes[action.note_id] = (index, get_cell_source(cell))
+                notes[action.note_id] = (index, action.body)
 
             processed.append(apply(cell, action))
         except ScrubberError as e:

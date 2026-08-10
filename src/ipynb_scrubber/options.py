@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 
 from collections.abc import Callable, Collection, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import yaml
@@ -39,44 +39,86 @@ class Header:
 
     ``options`` is the mapping the header holds, with values resolved by YAML.
     ``block_styled`` names the options written as a block scalar, which tells a
-    caller whether advice about block indentation is relevant.
+    caller whether advice about block indentation is relevant. ``body`` is the
+    cell's source below the header, which is the cell's actual content: the
+    header is instructions about the cell, not part of it.
     """
 
     options: dict[str, Any] = field(default_factory=dict)
     block_styled: frozenset[str] = frozenset()
+    body: str = ''
+    #: The header's source lines that belong to somebody else's options, which
+    #: are part of the cell and belong in the output above whatever replaces it.
+    kept: str = ''
 
 
-def _code_header(source: str) -> str:
-    """The YAML text carried by a code cell's leading run of ``#|`` lines.
+@dataclass(frozen=True)
+class _Split:
+    """A cell's source divided at the end of its option header."""
+
+    #: The YAML text the header carries, with its comment syntax stripped.
+    header: str
+    #: The source below the header, verbatim.
+    body: str
+    #: The source line each line of ``header`` was taken from. Empty for a cell
+    #: type whose header cannot be kept one line at a time, which means its
+    #: header is replaced whole.
+    origins: tuple[int, ...] = ()
+    #: The cell's source lines, so a kept origin can be written back out.
+    source_lines: tuple[str, ...] = ()
+
+
+def _code_header(source: str) -> _Split:
+    """Split a code cell's source at the end of its leading ``#|`` run.
 
     Each marker is stripped along with at most one following space, so that
     content indented relative to the marker keeps that indentation. A blank
     line participates in the header when another ``#|`` line follows it, which
-    is what lets a block scalar contain one.
+    is what lets a block scalar contain one. A blank line with no ``#|`` after
+    it belongs to the body.
     """
+    lines = source.split('\n')
     header: list[str] = []
+    origins: list[int] = []
     pending: list[str] = []
+    pending_origins: list[int] = []
+    end = 0
 
-    for line in source.split('\n'):
+    for index, line in enumerate(lines):
         text = line.lstrip()
         if text.startswith(CODE_MARKER):
             header.extend(pending)
+            origins.extend(pending_origins)
             pending.clear()
+            pending_origins.clear()
             header.append(text[len(CODE_MARKER) :].removeprefix(' '))
+            origins.append(index)
+            end = index + 1
         elif text:
             break
         else:
             pending.append('')
+            pending_origins.append(index)
 
-    return '\n'.join(header)
+    return _Split(
+        header='\n'.join(header),
+        body='\n'.join(lines[end:]),
+        origins=tuple(origins),
+        source_lines=tuple(lines),
+    )
 
 
-def _markdown_header(source: str) -> str:
-    """The YAML text carried by a markdown cell's leading HTML comments.
+def _markdown_header(source: str) -> _Split:
+    """Split a markdown cell's source at the end of its leading HTML comments.
 
     A comment is either self-closing (``<!-- scrub-omit: -->``) or spans to a
     line containing only ``-->``. The inner text of each is concatenated into
     one document.
+
+    No origins are reported, so the header is replaced whole rather than a line
+    at a time. A comment's delimiters are not options and do not survive their
+    contents being removed, and nothing but this tool writes options in a
+    markdown cell's comments, so there is nothing there worth keeping.
 
     Raises:
         ProcessingError: If a comment is never closed.
@@ -85,6 +127,7 @@ def _markdown_header(source: str) -> str:
     header: list[str] = []
     pending: list[str] = []
     index = 0
+    end = 0
 
     while index < len(lines):
         text = lines[index].strip()
@@ -104,6 +147,7 @@ def _markdown_header(source: str) -> str:
             header.append(
                 inner.removesuffix(MARKDOWN_SUFFIX).rstrip().removeprefix(' '),
             )
+            end = index
             continue
 
         header.append(inner.removeprefix(' '))
@@ -118,11 +162,12 @@ def _markdown_header(source: str) -> str:
                 break
             header.append(lines[index])
             index += 1
+        end = index
 
-    return '\n'.join(header)
+    return _Split('\n'.join(header), '\n'.join(lines[end:]))
 
 
-_HEADERS: dict[str, Callable[[str], str]] = {
+_HEADERS: dict[str, Callable[[str], _Split]] = {
     'code': _code_header,
     'markdown': _markdown_header,
 }
@@ -294,6 +339,45 @@ def _block_styled(node: yaml.MappingNode) -> frozenset[str]:
     )
 
 
+def _kept_header(
+    node: yaml.MappingNode,
+    split: _Split,
+    names: Collection[str],
+) -> str:
+    """The header's own source lines, minus those the tool's options occupy.
+
+    The header is shared, so the lines carrying somebody else's options are
+    part of the cell and ride into the output with it. Only the lines this
+    tool's own options sit on are its to remove.
+
+    An option owns every line from its key down to the next key, which is what
+    puts a block scalar's content with the option that opened it. A header with
+    no origins is replaced whole.
+    """
+    if not split.origins:
+        return ''
+
+    total = len(split.origins)
+    keys = [
+        (key.value, key.start_mark.line)
+        for key, _ in node.value
+        if isinstance(key, yaml.ScalarNode)
+    ]
+
+    dropped: set[int] = set()
+    for index, (name, start) in enumerate(keys):
+        if name not in names:
+            continue
+        end = keys[index + 1][1] if index + 1 < len(keys) else total
+        dropped.update(range(max(start, 0), min(end, total)))
+
+    return '\n'.join(
+        split.source_lines[split.origins[line]]
+        for line in range(total)
+        if line not in dropped
+    )
+
+
 def _claims_a_name(node: yaml.Node, text: str, names: Collection[str]) -> bool:
     """Whether the header writes one of ``names`` where an option would go.
 
@@ -347,7 +431,7 @@ def _loader(text: str) -> Iterator[yaml.SafeLoader]:
 def _build(
     loader: yaml.SafeLoader,
     node: yaml.Node,
-    text: str,
+    split: _Split,
     options: Collection[Option],
 ) -> Header:
     """The Header a composed node graph describes.
@@ -361,10 +445,10 @@ def _build(
     try:
         data = loader.construct_document(node)
     except yaml.YAMLError as e:
-        raise ProcessingError(_describe(e, text)) from e
+        raise ProcessingError(_describe(e, split.header)) from e
 
     if not isinstance(node, yaml.MappingNode):
-        opener = _opening_line(node, text)
+        opener = _opening_line(node, split.header)
         if opener in names:
             raise _missing_colon(opener)
         raise _not_a_mapping(data)
@@ -372,7 +456,7 @@ def _build(
     _reject_repeated_names(node)
     _reject_commented_values(
         node,
-        text,
+        split.header,
         frozenset(option.name for option in options if option.takes_text),
     )
 
@@ -383,11 +467,15 @@ def _build(
             f'{unnamed[0]!r}. Quote it if it was meant as a name',
         )
 
-    return Header(data, _block_styled(node))
+    return Header(
+        data,
+        _block_styled(node),
+        kept=_kept_header(node, split, names),
+    )
 
 
 def _read(
-    text: str,
+    split: _Split,
     options: Collection[Option],
     names: frozenset[str],
 ) -> Header:
@@ -406,15 +494,15 @@ def _read(
         ProcessingError: If it is well-formed but names one of ``names``
             wrongly.
     """
-    with _loader(text) as loader:
+    with _loader(split.header) as loader:
         node = loader.get_single_node()
         if node is None:
             return Header()
 
         try:
-            return _build(loader, node, text, options)
+            return _build(loader, node, split, options)
         except ProcessingError:
-            if _claims_a_name(node, text, names):
+            if _claims_a_name(node, split.header, names):
                 raise
             return Header()
 
@@ -452,15 +540,16 @@ def parse_cell_options(
     """
     build = _HEADERS.get(cell_type)
     if build is None:
-        return Header()
+        # No comment syntax to hide a header in, so the source is all body.
+        return Header(body=source)
 
-    text = build(source)
-    if not text.strip():
-        return Header()
+    split = build(source)
+    if not split.header.strip():
+        return Header(body=split.body)
 
     names = frozenset(option.name for option in options)
     try:
-        return _read(text, options, names)
+        header = _read(split, options, names)
     except yaml.YAMLError as e:
         # There is no node graph, so nothing can say whose header this is.
         # Guessing from the raw text claims headers that merely look like ours,
@@ -468,4 +557,9 @@ def parse_cell_options(
         # output. Neither is worth it: the header is YAML, Quarto reads the same
         # block as YAML, and text this malformed is broken for whoever else
         # writes here too. Report it.
-        raise ProcessingError(_describe(e, text)) from e
+        raise ProcessingError(_describe(e, split.header)) from e
+
+    # Where the body starts is a property of the source, not of what the header
+    # turned out to say, so it is attached here rather than threaded through
+    # every path that decides what the header means.
+    return replace(header, body=split.body)

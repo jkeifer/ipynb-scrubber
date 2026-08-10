@@ -56,6 +56,7 @@ def test_note_defaults_to_clear_text():
     assert decide(cell('#| scrub-note: ex-1\nx = 1'), OPTS) == Note(
         'ex-1',
         OPTS.clear_text,
+        'x = 1',
     )
 
 
@@ -89,10 +90,17 @@ def test_multiple_scrubber_options_catches_underindented_block_content():
 
 
 def test_non_scrubber_sibling_options_are_allowed():
-    """A Quarto option alongside a scrubber option must stay legal."""
+    """A Quarto option alongside a scrubber option must stay legal, and survive.
+
+    '#| echo: false' configures the cell that remains in the exercise notebook,
+    so removing it along with the scrub-note that sat above it would silently
+    change how the notebook renders.
+    """
     assert decide(cell('#| scrub-note: ex-1\n#| echo: false\nx = 1'), OPTS) == Note(
         'ex-1',
         OPTS.clear_text,
+        'x = 1',
+        '#| echo: false',
     )
 
 
@@ -139,12 +147,16 @@ def test_note_mapping_supplies_replacement_text():
             'x = 1',
         ],
     )
-    assert decide(cell(source), OPTS) == Note('ex-1', 'def add(a, b):\n    pass')
+    assert decide(cell(source), OPTS) == Note(
+        'ex-1',
+        'def add(a, b):\n    pass',
+        'x = 1',
+    )
 
 
 def test_note_mapping_without_text_uses_the_default():
     source = '#| scrub-note:\n#|   id: ex-1\nx = 1'
-    assert decide(cell(source), OPTS) == Note('ex-1', OPTS.clear_text)
+    assert decide(cell(source), OPTS) == Note('ex-1', OPTS.clear_text, 'x = 1')
 
 
 def test_note_mapping_rejects_an_unknown_key():
@@ -190,12 +202,12 @@ def test_apply_leaves_the_input_cell_alone():
 
 
 def test_apply_note_writes_reference_comment():
-    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', '# TODO'))
+    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', '# TODO', ''))
     assert result['source'] == '# (See notes: ex-1)\n# TODO'
 
 
 def test_apply_note_with_empty_text_omits_the_newline():
-    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', ''))
+    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', '', ''))
     assert result['source'] == '# (See notes: ex-1)'
 
 

@@ -22,17 +22,26 @@ class Keep:
 
 @dataclass(frozen=True)
 class Clear:
-    """Replace the cell's source with ``text``."""
+    """Replace the cell's source with ``text``, below any ``header`` kept."""
 
     text: str
+    header: str = ''
 
 
 @dataclass(frozen=True)
 class Note:
-    """Save the cell's source under ``note_id`` and replace it with ``text``."""
+    """Save ``body`` under ``note_id`` and replace the cell's source with ``text``.
+
+    ``body`` is the cell's content with its option header removed. The header
+    is an instruction to this tool, and one carrying ``text`` holds the very
+    scaffolding the student is meant to fill in, so keeping it would file the
+    exercise prompt alongside the answer it is a prompt for.
+    """
 
     note_id: str
     text: str
+    body: str
+    header: str = ''
 
 
 #: What can happen to a cell that survives into the output. ``apply`` accepts
@@ -76,7 +85,12 @@ def _note_id(value: Any, opts: ScrubbingOptions) -> str:
     )
 
 
-def _note_action(value: Any, opts: ScrubbingOptions) -> Note:
+def _note_action(
+    value: Any,
+    opts: ScrubbingOptions,
+    body: str,
+    kept: str,
+) -> Note:
     """Build the Note described by a ``scrub-note`` option's value.
 
     The value is either the note id on its own, or a mapping carrying ``id``
@@ -87,7 +101,7 @@ def _note_action(value: Any, opts: ScrubbingOptions) -> Note:
             the mapping carries a key the option does not define.
     """
     if not isinstance(value, dict):
-        return Note(_note_id(value, opts), opts.clear_text)
+        return Note(_note_id(value, opts), opts.clear_text, body, kept)
 
     try:
         reject_unknown_keys(value, ('id', 'text'), f'{opts.note_tag} key')
@@ -101,6 +115,8 @@ def _note_action(value: Any, opts: ScrubbingOptions) -> Note:
             value.get('text'),
             opts.clear_text,
         ),
+        body,
+        kept,
     )
 
 
@@ -145,6 +161,22 @@ def _check_one_scrubber_option(
             "it more deeply than that option's line"
         )
     raise ProcessingError(message)
+
+
+def _under_header(kept: str, content: str) -> str:
+    """``content`` with the header lines the cell keeps restored above it.
+
+    A cell's option header is shared, so the lines carrying somebody else's
+    options survive a rewrite: they configure the cell that remains, not the
+    content this tool replaced.
+
+    Everything kept goes above the replacement, whatever order it sat in
+    relative to the option that was removed. That is not a tidying choice: a
+    ``#|`` run is only read as options where it is, at the very top of the
+    cell. An option written back below the replacement would be an ordinary
+    comment, and would quietly stop doing anything at all.
+    """
+    return f'{kept}\n{content}' if kept else content
 
 
 def _omit_action(value: Any, opts: ScrubbingOptions) -> Omit:
@@ -207,7 +239,12 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
             raise ProcessingError(
                 f"Option '{opts.note_tag}' is only supported on code cells",
             )
-        return _note_action(cell_options[opts.note_tag], opts)
+        return _note_action(
+            cell_options[opts.note_tag],
+            opts,
+            header.body,
+            header.kept,
+        )
 
     if opts.clear_tag in cell_options:
         return Clear(
@@ -216,6 +253,7 @@ def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
                 cell_options[opts.clear_tag],
                 opts.clear_text,
             ),
+            header.kept,
         )
 
     return Keep()
@@ -239,11 +277,11 @@ def apply(cell: Cell, action: CellRewrite) -> Cell:
     match action:
         case Keep():
             pass
-        case Clear(text=text):
-            updated['source'] = text
-        case Note(note_id=note_id, text=text):
+        case Clear(text=text, header=kept):
+            updated['source'] = _under_header(kept, text)
+        case Note(note_id=note_id, text=text, header=kept):
             suffix = f'\n{text}' if text else ''
-            updated['source'] = f'# (See notes: {note_id}){suffix}'
+            updated['source'] = _under_header(kept, f'# (See notes: {note_id}){suffix}')
         case _:
             assert_never(action)
 
