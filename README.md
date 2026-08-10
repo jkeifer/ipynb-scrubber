@@ -34,8 +34,8 @@ removing instructor-only content.
 - **Keep other cell options**: A code cell's `#|` header is shared, so a
   scrubbed cell keeps the directives that are not this tool's, such as Quarto's
   `#| echo: false`
-- **Clear all outputs**: Remove all cell outputs and execution counts for a
-  clean slate
+- **Clear all outputs**: Every cell comes out with no outputs and no execution
+  count, for a clean slate
 - **Project-wide processing**: Process multiple notebooks with a single command
   using a TOML config file
 - **Never a partial result**: Outputs are moved into place only once written in
@@ -71,13 +71,21 @@ ipynb-scrubber scrub-notebook < input.ipynb > output.ipynb
 - `--clear-tag TAG`: Tag marking cells to clear (default: `scrub-clear`)
 - `--clear-text TEXT`: Replacement text for cleared cells where unspecified
   (default: `# TODO: Implement this`)
+- `--clear-text-markdown TEXT`: Replacement text for cleared markdown cells
+  where unspecified (default: `*TODO: Implement this*`)
 - `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
 - `--note-tag TAG`: Option name marking cells to save to notes
   (default: `scrub-note`)
 - `--notes-file PATH`: Path to write the notes file, required if any cell
   carries the note tag (see [Notes Files](#notes-files))
 
-Each of the three names must start with a letter and contain only letters,
+A placeholder has to read as the kind of cell it lands in, which is why
+markdown gets its own default. The code default is a comment, and a comment
+dropped into a markdown cell renders as a heading rather than as the note to
+the student it is meant to be. Code and raw cells use `--clear-text`; markdown
+cells use `--clear-text-markdown`.
+
+Each of the three tag names must start with a letter and contain only letters,
 digits, hyphens and underscores. A name is written as a YAML key in a cell's
 option header as well as a Jupyter metadata tag, so it has to survive that
 round trip as itself — an empty name, one containing whitespace, or one
@@ -156,6 +164,7 @@ Create a `.ipynb-scrubber.toml` file with global options and file entries:
 [options]
 clear-tag = "scrub-clear"
 clear-text = "# TODO: Implement this"
+clear-text-markdown = "*TODO: Implement this*"
 omit-tag = "scrub-omit"
 note-tag = "scrub-note"
 
@@ -168,6 +177,7 @@ output = "exercises/lesson1.ipynb"
 input = "lectures/lesson2.ipynb"
 output = "exercises/lesson2.ipynb"
 clear-text = "# YOUR CODE HERE"  # Override global option
+clear-text-markdown = "**YOUR ANSWER HERE**"
 
 [[files]]
 input = "lectures/lesson3.ipynb"
@@ -182,18 +192,34 @@ Each file entry supports:
 - `output` (required): Path where scrubbed notebook will be written
 - `clear-tag` (optional): Override global clear tag
 - `clear-text` (optional): Override global clear text
+- `clear-text-markdown` (optional): Override global markdown clear text
 - `omit-tag` (optional): Override global omit tag
 - `note-tag` (optional): Override global note tag
 - `notes-file` (optional): Path to write the notes file for this notebook
 
 Overrides are presence-based, not truthiness-based: a file entry that sets
 `clear-text = ""` gets an empty string for that file rather than falling back
-to the global default.
+to the global default. `notes-file` is the one exception: an empty string is
+not a path anything can be written to, and presence leaves nowhere for it to
+mean "no notes file", so `notes-file = ""` is an error rather than a silent
+omission. Leave the key out entirely to have no notes file.
 
 Unknown keys anywhere in the config — the top level, `[options]`, or a
 `[[files]]` entry — are rejected, and the error names the invalid key and
 lists the valid ones, so a misspelled `clear-tagg` fails the run instead of
 silently leaving solution cells unscrubbed.
+
+Values are type-checked too. TOML can put anything at all under a key, so a
+value of the wrong type is reported against the key that holds it rather than
+found later by whatever chokes on it:
+
+```text
+clear-text must be str, but got int: 42
+```
+
+Every option is checked, in `[options]` and in a `[[files]]` entry alike, as
+are an entry's `input`, `output` and `notes-file`: all three name a path, and a
+path is something TOML can only spell as a string.
 
 `clear-tag`, `omit-tag` and `note-tag` must each be a usable name — starting
 with a letter and containing only letters, digits, hyphens and underscores —
@@ -212,7 +238,9 @@ Add configuration to your existing `pyproject.toml` under
 [tool.ipynb-scrubber.options]
 clear-tag = "scrub-clear"
 clear-text = "# TODO: Implement this"
+clear-text-markdown = "*TODO: Implement this*"
 omit-tag = "scrub-omit"
+note-tag = "scrub-note"
 
 # File entries (required - at least one)
 [[tool.ipynb-scrubber.files]]
@@ -243,13 +271,15 @@ exported from the package root:
 
 ```python
 from ipynb_scrubber import (
+    Cell,
     FileEntry,
+    InvalidNotebookError,
     Notebook,
+    ProcessingError,
     ProjectConfig,
     ScrubberError,
     ScrubbingOptions,
     process_notebook,
-    scrub_file,
     scrub_files,
 )
 ```
@@ -274,7 +304,7 @@ exercise, notes = process_notebook(notebook, ScrubbingOptions())
 
 `notes` maps each note id to the original source of the cell it came from,
 below that cell's option header.
-`ScrubbingOptions` carries the same four settings as the CLI flags, so
+`ScrubbingOptions` carries the same five settings as the CLI flags, so
 `ScrubbingOptions(clear_text='# YOUR CODE HERE')` mirrors
 `--clear-text '# YOUR CODE HERE'`.
 
@@ -287,16 +317,16 @@ notebook and notes file:
 ```python
 from ipynb_scrubber import ProjectConfig, scrub_files
 
-config = ProjectConfig.discover()      # or ProjectConfig.from_file(path)
+config = ProjectConfig.discover()  # or ProjectConfig.from_file(path)
 
 scrub_files(config.files)
 ```
 
 `scrub_files` is all-or-nothing across the batch: every output is staged first
-and committed only once all of them have succeeded. Looping over `config.files`
-and calling `scrub_file` on each is not equivalent — `scrub_file` is atomic for
-its own entry, but a failure on the fourth notebook would leave the first three
-committed.
+and committed only once all of them have succeeded. It is the only entry point
+for writing files, and passing it a one-element list is how you scrub a single
+notebook — calling it once per entry in a loop is not equivalent, because a
+failure on the fourth notebook would leave the first three committed.
 
 Each `FileEntry` carries its own fully resolved `ScrubbingOptions`, with any
 per-entry overrides already merged over the global ones, so `entry.options`
@@ -381,29 +411,33 @@ write. Quoting it is what Quarto asks for too, so the fix serves both readers.
 def secret_solution():
     return 42
 
+
 # Or with custom replacement text:
 #| scrub-clear: "# WRITE YOUR SOLUTION HERE"
 def another_solution():
-    return "hidden"
+    return 'hidden'
+
 
 # To save to notes and clear (requires an id):
 #| scrub-note: exercise-1
 def solution_with_notes():
     # This solution will be saved to the notes file
     # and then cleared from the student version
-    return "answer"
+    return 'answer'
+
 
 # With custom replacement text:
 #| scrub-note:
 #|   id: exercise-2
 #|   text: "# YOUR SOLUTION HERE"
 def another_noted_solution():
-    return "more answers"
+    return 'more answers'
+
 
 # To omit entirely:
 #| scrub-omit:
 # This cell will be removed
-print("Instructor only!")
+print('Instructor only!')
 ```
 
 #### Markdown Cells - HTML Comments
@@ -451,8 +485,9 @@ cleared content:
 - `<!-- scrub-clear: Your custom text -->` (markdown cells)
 - Empty text: `#| scrub-clear: ""` (results in empty cell)
 
-An option written with no value at all — `#| scrub-clear:` — uses the default
-`--clear-text` value.
+An option written with no value at all — `#| scrub-clear:` — uses the
+configured default for the kind of cell it is in: `--clear-text` in a code or
+raw cell, `--clear-text-markdown` in a markdown cell.
 
 **Replacement text containing `#` must be quoted or written as a block
 scalar.** In YAML an unquoted `#` opens a comment that runs to the end of the
@@ -767,6 +802,13 @@ def solve():
 `metadata.language_info.name` or `metadata.kernelspec.language`. A notebook that
 declares neither is fenced as `python`.
 
+**A fence is as long as its body requires.** A note whose cell contains
+backticks — source that prints or documents Markdown — is fenced with a run
+longer than the longest one inside it. Markdown closes a fenced block at the
+first run at least as long as the one that opened it, so a fixed three
+backticks would let such a cell end its own note early and swallow the rest of
+the notes file as prose.
+
 **Notes file format:**
 
 The notes file is generated in Markdown format with human-readable IDs:
@@ -816,7 +858,7 @@ ipynb-scrubber scrub-notebook --notes-file solutions.md < lecture.ipynb > exerci
 
 ```python
 # Instructions - this will remain unchanged
-print("Exercise: implement the functions below")
+print('Exercise: implement the functions below')
 ```
 
 **Code Cell 2** (Quarto option with custom text):
@@ -826,8 +868,9 @@ print("Exercise: implement the functions below")
 def add(a, b):
     return a + b
 
+
 result = add(1, 2)
-print(f"Result: {result}")
+print(f'Result: {result}')
 ```
 
 **Markdown Cell 3** (HTML comment):
@@ -845,7 +888,7 @@ The add function works by using the + operator...
 # Cell has metadata: {"tags": ["scrub-omit"]}
 # This cell will be removed entirely
 assert add(1, 2) == 3
-print("Tests pass!")
+print('Tests pass!')
 ```
 
 ### Output Notebook
@@ -854,7 +897,7 @@ print("Tests pass!")
 
 ```python
 # Instructions - this will remain unchanged
-print("Exercise: implement the functions below")
+print('Exercise: implement the functions below')
 ```
 
 **Code Cell 2** (cleared with custom text):
@@ -873,8 +916,8 @@ print("Exercise: implement the functions below")
 
 ## Behavior
 
-- **All cell outputs are cleared**: Every cell has its output and execution
-  count removed
+- **All cell outputs are cleared**: Every code cell's `outputs` is emptied and
+  its `execution_count` set to null; any other cell type has both keys dropped
 - **Tagged cells are processed**:
   - Cells with the clear tag have their source code replaced with placeholder
     text
@@ -897,6 +940,33 @@ print("Exercise: implement the functions below")
 - **Error handling**: A problem with a notebook, a config or a cell's options is
   reported as a short message with a non-zero exit status. Anything else is a
   defect in this tool and surfaces as a traceback
+
+### Output Format
+
+Exercise notebooks and notes files are meant to be diffed and kept in version
+control, so what comes out is pinned rather than left to the machine the tool
+happened to run on:
+
+- **Always UTF-8**: Output is written as UTF-8 whatever the locale says. Input
+  notebooks are read as bytes and the encoding is taken from the JSON itself,
+  so a notebook containing an accent is not a crash on a machine whose locale
+  is not UTF-8
+- **Non-ASCII is written literally**: Characters are not escaped to `\uXXXX`,
+  matching what Jupyter's own writer does, so notebooks holding accents or
+  emoji stay readable in a diff
+- **A trailing newline**: The file ends with one, so anything appending to it
+  is not a spurious diff hunk
+- **One-space indentation**: The same as Jupyter's, so a scrubbed notebook is
+  diffable against one that has been opened and saved
+- **Source shape is preserved**: nbformat lets a cell's `source` be one string
+  or a list of lines, and a rewritten cell is written back in the shape it
+  arrived in. A cell that was a list of lines does not collapse into a single
+  long line while its untouched neighbours stay line-per-line
+- **`outputs` and `execution_count` are emptied, not removed**: A scrubbed code
+  cell gets `outputs: []` and `execution_count: null`. The nbformat schema
+  requires both keys on a code cell, so removing them would produce a notebook
+  that fails validation. Cells of any other type must not carry them at all, so
+  there they are dropped
 
 ## License
 
