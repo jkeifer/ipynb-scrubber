@@ -139,6 +139,34 @@ def test_colliding_tags_are_rejected(kwargs):
         ScrubbingOptions(**kwargs)
 
 
+@pytest.mark.parametrize(
+    'name',
+    ['', ' ', 'a b', '.*', '-x', '#foo', '1st', 'a:b'],
+)
+def test_unusable_tag_names_are_rejected(name):
+    """A tag is written as a YAML key, so it has to survive that as itself."""
+    with pytest.raises(ScrubberError, match='must start with a letter'):
+        ScrubbingOptions(omit_tag=name)
+
+
+def test_a_usable_tag_name_is_accepted():
+    assert ScrubbingOptions(omit_tag='Drop_me-2').omit_tag == 'Drop_me-2'
+
+
+def test_an_unusable_tag_name_is_rejected_from_dict():
+    with pytest.raises(ScrubberError, match='must start with a letter'):
+        ScrubbingOptions.from_dict({'omit-tag': 'not a name'})
+
+
+def test_file_override_with_an_unusable_tag_name_is_rejected():
+    """The merge goes through replace(), so __post_init__ catches it."""
+    with pytest.raises(ScrubberError, match='must start with a letter'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'has space'},
+            ScrubbingOptions(),
+        )
+
+
 def test_colliding_tags_are_rejected_from_dict():
     with pytest.raises(ScrubberError, match='must all be distinct'):
         ScrubbingOptions.from_dict({'clear-tag': 'dup', 'omit-tag': 'dup'})
