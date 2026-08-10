@@ -112,7 +112,7 @@ The three names must also differ from one another. Pointing two of them at the
 same string would make a marked cell ambiguous, so it is rejected:
 
 ```text
-clear-tag, omit-tag and note-tag must all be distinct, but got
+clear-tag, omit-tag, note-tag must all be distinct, but got
 clear-tag='x', omit-tag='x', note-tag='scrub-note'
 ```
 

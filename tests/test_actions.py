@@ -1,8 +1,10 @@
 import pytest
 
+from ipynb_scrubber import actions
 from ipynb_scrubber.actions import Clear, Keep, Note, Omit, apply, decide
 from ipynb_scrubber.config import ScrubbingOptions
 from ipynb_scrubber.exceptions import ProcessingError
+from ipynb_scrubber.options import Option
 from tests.builders import cell
 
 OPTS = ScrubbingOptions()
@@ -241,3 +243,54 @@ def test_clear_via_tag_only():
 def test_apply_clear_replaces_source():
     result = apply({'cell_type': 'code', 'source': 'x = 1'}, Clear('replaced'))
     assert result['source'] == 'replaced'
+
+
+def registered_tags():
+    """The tags the option registry defines, derived here as it documents them."""
+    return {
+        key: Option(getattr(OPTS, spec.field), spec.takes_text)
+        for key, spec in ScrubbingOptions.KEYS.items()
+        if spec.takes_text is not None
+    }
+
+
+def test_the_header_parser_is_handed_every_registered_tag(monkeypatch):
+    """The parser is told which options are this tool's; nobody lists them twice.
+
+    An option the parser never hears about is one whose value a YAML comment
+    can eat unnoticed, and one no layer below would act on, so a fourth tag
+    added to the registry has to arrive here without anyone remembering it.
+    """
+    handed = []
+    parse = actions.parse_cell_options
+
+    def spy(cell_type, source, options):
+        handed.append(tuple(options))
+        return parse(cell_type, source, options)
+
+    monkeypatch.setattr(actions, 'parse_cell_options', spy)
+    decide(cell('x = 1'), OPTS)
+
+    assert len(handed) == 1
+    assert set(handed[0]) == set(registered_tags().values())
+
+
+def test_the_precedence_order_names_every_registered_tag():
+    """The order states a sequence, not the set: the set is the registry's."""
+    assert sorted(key for key, _ in actions._PRECEDENCE_ORDER) == sorted(
+        registered_tags(),
+    )
+
+
+def test_an_order_that_forgets_a_registered_tag_is_refused():
+    """Forgetting one would parse the option and then quietly ignore the cell."""
+    with pytest.raises(RuntimeError, match='precedence order'):
+        actions._precedence((('omit-tag', actions._omit_action),))
+
+
+def test_an_order_naming_an_option_that_is_not_a_tag_is_refused():
+    """'clear-text' says what a cleared cell holds; it never marks a cell."""
+    with pytest.raises(RuntimeError, match='precedence order'):
+        actions._precedence(
+            (*actions._PRECEDENCE_ORDER, ('clear-text', actions._omit_action)),
+        )

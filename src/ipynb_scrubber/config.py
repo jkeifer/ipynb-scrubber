@@ -152,11 +152,36 @@ class OptionSpec:
     The config loader, the value-type check and the CLI flag all read the
     same entry, so an option exists in exactly one place instead of having to
     be kept in agreement across several.
+
+    ``takes_text`` carries the one thing about an option that is only true once
+    it leaves a config file. An option whose value names a tag is written again
+    inside a notebook, where its own value is either text the author wrote or
+    nothing at all, and that is the one fact the header parser needs beyond the
+    name. ``None`` says the option names no tag at all: ``clear-text`` says
+    what a cleared cell is left holding, it does not mark a cell. Carrying it
+    here is what makes this registry the answer to "which options are tags",
+    instead of a second list kept beside it and forgotten.
     """
 
     field: str
     type: type
     help: str
+    takes_text: bool | None = None
+
+
+@dataclass(frozen=True)
+class TagSpec:
+    """One option that marks cells, as the code that reads cells needs it.
+
+    A tag's spelling is configured, so what is fixed is the field holding it
+    rather than the name itself: a caller resolves ``field`` against the
+    options it was handed. ``takes_text`` is not optional here, because
+    everything in this projection of the registry is a tag — which is the point
+    of the projection.
+    """
+
+    field: str
+    takes_text: bool
 
 
 @dataclass
@@ -171,12 +196,14 @@ class ScrubbingOptions:
 
     #: TOML key -> the option it names. The single source of truth for which
     #: options exist, what they are called in config files, what a value for
-    #: one has to be, and how each describes itself on the command line.
+    #: one has to be, how each describes itself on the command line, and which
+    #: of them go on to mark cells.
     KEYS: ClassVar[dict[str, OptionSpec]] = {
         'clear-tag': OptionSpec(
             'clear_tag',
             str,
             'Tag marking cells to clear',
+            takes_text=True,
         ),
         'clear-text': OptionSpec(
             'clear_text',
@@ -192,13 +219,32 @@ class ScrubbingOptions:
             'omit_tag',
             str,
             'Tag marking cells to omit entirely',
+            takes_text=False,
         ),
         'note-tag': OptionSpec(
             'note_tag',
             str,
             'Option name marking cells to save to notes',
+            takes_text=True,
         ),
     }
+
+    @classmethod
+    def tags(cls) -> dict[str, TagSpec]:
+        """The options that name a tag, by the config key naming each.
+
+        Derived from the registry rather than listed again, so a tag added
+        there is a tag everywhere at once: the name checks below, the header
+        parser that has to know whose values it is reading, and the precedence
+        order that decides what a cell carrying one becomes. A tag the registry
+        knows and one of those layers does not is silent breakage — the option
+        is written, and then nothing at all happens to the cell.
+        """
+        return {
+            key: TagSpec(spec.field, spec.takes_text)
+            for key, spec in cls.KEYS.items()
+            if spec.takes_text is not None
+        }
 
     def __post_init__(self) -> None:
         """Reject values of the wrong type, and tag names unusable or colliding.
@@ -220,23 +266,23 @@ class ScrubbingOptions:
         means shipping the solution. Settling both here is what lets
         everything downstream take a configured name at its word.
 
-        The three tags are also matched as a set, so two spellings that are
-        equal collapse into one and whichever behaviour loses the precedence
-        order silently disappears. All of it runs for ``replace()`` too, so a
+        The tags are also matched as a set, so two spellings that are equal
+        collapse into one and whichever behaviour loses the precedence order
+        silently disappears. All of it runs for ``replace()`` too, so a
         per-file override that breaks any rule is caught as well.
+
+        Which options are tags is asked of the registry, so a tag added there
+        is checked here without anyone having to remember to add it: an
+        unchecked name is one every rule above was written to catch.
 
         Raises:
             ScrubberError: If a value is not the declared type, if a tag is
-                not a usable name, or if the three tags are not all distinct.
+                not a usable name, or if the tags are not all distinct.
         """
         for key, spec in self.KEYS.items():
             reject_wrong_type(key, getattr(self, spec.field), spec.type)
 
-        named = {
-            'clear-tag': self.clear_tag,
-            'omit-tag': self.omit_tag,
-            'note-tag': self.note_tag,
-        }
+        named = {key: getattr(self, tag.field) for key, tag in self.tags().items()}
 
         resolve = yaml.resolver.Resolver().resolve
         for key, name in named.items():
@@ -254,10 +300,10 @@ class ScrubbingOptions:
 
         tags = tuple(named.values())
         if len(set(tags)) != len(tags):
+            keys = ', '.join(named)
+            spellings = ', '.join(f'{key}={name!r}' for key, name in named.items())
             raise ScrubberError(
-                'clear-tag, omit-tag and note-tag must all be distinct, but '
-                f'got clear-tag={self.clear_tag!r}, omit-tag={self.omit_tag!r}, '
-                f'note-tag={self.note_tag!r}',
+                f'{keys} must all be distinct, but got {spellings}',
             )
 
     def merged_with(self, data: dict[str, Any]) -> Self:
