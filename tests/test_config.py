@@ -1,3 +1,4 @@
+import dataclasses
 import tomllib
 
 from pathlib import Path
@@ -74,8 +75,114 @@ def test_cli_defaults_match_dataclass_defaults():
 
     assert args.clear_tag == defaults.clear_tag
     assert args.clear_text == defaults.clear_text
+    assert args.clear_text_markdown == defaults.clear_text_markdown
     assert args.omit_tag == defaults.omit_tag
     assert args.note_tag == defaults.note_tag
+
+
+def test_every_registered_option_gets_a_cli_flag():
+    """The registry is the single source of truth, including for the CLI."""
+    import argparse
+
+    from ipynb_scrubber.cli import ScrubNotebook
+
+    parser = argparse.ArgumentParser()
+    ScrubNotebook().set_args(parser)
+    args = parser.parse_args([])
+
+    for key, spec in ScrubbingOptions.KEYS.items():
+        assert getattr(args, spec.field) == getattr(ScrubbingOptions(), spec.field)
+        assert spec.help, f'{key} has no help text'
+
+
+def test_registry_field_names_are_real_dataclass_fields():
+    names = {f.name for f in dataclasses.fields(ScrubbingOptions)}
+    assert {spec.field for spec in ScrubbingOptions.KEYS.values()} <= names
+
+
+def test_markdown_clear_text_is_a_separate_option():
+    """A cleared markdown cell must not render its placeholder as a heading."""
+    defaults = ScrubbingOptions()
+    assert defaults.clear_text_markdown == '*TODO: Implement this*'
+    assert defaults.clear_text_markdown != defaults.clear_text
+
+
+def test_markdown_clear_text_is_configurable_globally():
+    opts = ScrubbingOptions.from_dict({'clear-text-markdown': '_do this_'})
+    assert opts.clear_text_markdown == '_do this_'
+
+
+def test_markdown_clear_text_is_overridable_per_file():
+    entry = FileEntry.from_dict(
+        {
+            'input': 'a.ipynb',
+            'output': 'b.ipynb',
+            'clear-text-markdown': '_mine_',
+        },
+        ScrubbingOptions(clear_text_markdown='_global_'),
+    )
+    assert entry.options.clear_text_markdown == '_mine_'
+
+
+@pytest.mark.parametrize('key', list(ScrubbingOptions.KEYS))
+@pytest.mark.parametrize('value', [5, None, 1.5, True, ['x'], {'a': 1}])
+def test_option_values_of_the_wrong_type_are_rejected(key, value):
+    """An untyped TOML value must not reach the dataclass unchecked."""
+    with pytest.raises(ScrubberError, match=f'{key} must be str'):
+        ScrubbingOptions.from_dict({key: value})
+
+
+def test_wrong_type_error_names_the_type_and_the_value():
+    with pytest.raises(ScrubberError, match=r'clear-tag must be str.*int: 5'):
+        ScrubbingOptions.from_dict({'clear-tag': 5})
+
+
+@pytest.mark.parametrize('key', list(ScrubbingOptions.KEYS))
+def test_file_level_option_of_the_wrong_type_is_rejected(key):
+    with pytest.raises(ScrubberError, match=f'{key} must be str'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', key: 5},
+            ScrubbingOptions(),
+        )
+
+
+def test_direct_construction_with_a_wrong_type_is_rejected():
+    """__post_init__ guards replace() and hand construction alike."""
+    with pytest.raises(ScrubberError, match='clear-text must be str'):
+        ScrubbingOptions(clear_text=5)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize('key', ['input', 'output', 'notes-file'])
+def test_file_entry_path_of_the_wrong_type_is_rejected(key):
+    data = {'input': 'a.ipynb', 'output': 'b.ipynb'}
+    data[key] = 5
+    with pytest.raises(ScrubberError, match=f'{key} must be str'):
+        FileEntry.from_dict(data, ScrubbingOptions())
+
+
+def test_empty_notes_file_is_rejected():
+    """Presence-based: an empty path was asked for and cannot be written."""
+    with pytest.raises(ScrubberError, match='notes-file must not be empty'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'notes-file': ''},
+            ScrubbingOptions(),
+        )
+
+
+def test_absent_notes_file_is_none():
+    entry = FileEntry.from_dict(
+        {'input': 'a.ipynb', 'output': 'b.ipynb'},
+        ScrubbingOptions(),
+    )
+    assert entry.notes_file is None
+
+
+def test_present_notes_file_is_a_path():
+    entry = FileEntry.from_dict(
+        {'input': 'a.ipynb', 'output': 'b.ipynb', 'notes-file': 'n.md'},
+        ScrubbingOptions(),
+    )
+    assert entry.notes_file == Path('n.md')
 
 
 def test_unknown_global_option_errors():

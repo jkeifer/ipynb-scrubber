@@ -40,6 +40,25 @@ def reject_unknown_keys(
         )
 
 
+def reject_wrong_type(key: str, value: Any, expected: type) -> None:
+    """Raise unless ``value`` is the type ``key`` is declared to hold.
+
+    TOML values arrive untyped and are handed straight to a dataclass, so a
+    wrong type is otherwise found only by whatever eventually chokes on it:
+    a traceback from a regex handed an int, or — worse, because nothing
+    complains — a notebook written out with a number where its source should
+    be.
+
+    Raises:
+        ScrubberError: If ``value`` is not an instance of ``expected``.
+    """
+    if not isinstance(value, expected):
+        raise ScrubberError(
+            f'{key} must be {expected.__name__}, but got '
+            f'{type(value).__name__}: {value!r}',
+        )
+
+
 def _load_scrubber_section(path: Path) -> dict[str, Any] | None:
     """Read ``path`` and return the scrubber configuration it defines.
 
@@ -118,26 +137,68 @@ def find_config(start_dir: Path | None = None) -> tuple[Path, dict[str, Any]] | 
         current = parent
 
 
+@dataclass(frozen=True)
+class OptionSpec:
+    """Everything the rest of the code needs to know about one option.
+
+    The config loader, the value-type check and the CLI flag all read the
+    same entry, so an option exists in exactly one place instead of having to
+    be kept in agreement across several.
+    """
+
+    field: str
+    type: type
+    help: str
+
+
 @dataclass
 class ScrubbingOptions:
     """Scrubbing options."""
 
     clear_tag: str = 'scrub-clear'
     clear_text: str = '# TODO: Implement this'
+    clear_text_markdown: str = '*TODO: Implement this*'
     omit_tag: str = 'scrub-omit'
     note_tag: str = 'scrub-note'
 
-    #: TOML key -> dataclass field name. The single source of truth for
-    #: which options exist and what they are called in config files.
-    KEYS: ClassVar[dict[str, str]] = {
-        'clear-tag': 'clear_tag',
-        'clear-text': 'clear_text',
-        'omit-tag': 'omit_tag',
-        'note-tag': 'note_tag',
+    #: TOML key -> the option it names. The single source of truth for which
+    #: options exist, what they are called in config files, what a value for
+    #: one has to be, and how each describes itself on the command line.
+    KEYS: ClassVar[dict[str, OptionSpec]] = {
+        'clear-tag': OptionSpec(
+            'clear_tag',
+            str,
+            'Tag marking cells to clear',
+        ),
+        'clear-text': OptionSpec(
+            'clear_text',
+            str,
+            'Text for cleared cells where unspecified',
+        ),
+        'clear-text-markdown': OptionSpec(
+            'clear_text_markdown',
+            str,
+            'Text for cleared markdown cells where unspecified',
+        ),
+        'omit-tag': OptionSpec(
+            'omit_tag',
+            str,
+            'Tag marking cells to omit entirely',
+        ),
+        'note-tag': OptionSpec(
+            'note_tag',
+            str,
+            'Option name marking cells to save to notes',
+        ),
     }
 
     def __post_init__(self) -> None:
-        """Reject tag names that are unusable or that collide.
+        """Reject values of the wrong type, and tag names unusable or colliding.
+
+        The type check comes first so the two name checks below only ever see
+        strings: a config file can put anything at all under a key, and a
+        regex handed an int raises something the CLI does not know how to
+        report.
 
         A tag is written as a YAML key in a cell's option header and as a
         metadata tag, so it has to be something YAML reads back as the same
@@ -145,13 +206,16 @@ class ScrubbingOptions:
 
         The three tags are also matched as a set, so two spellings that are
         equal collapse into one and whichever behaviour loses the precedence
-        order silently disappears. Both checks run for ``replace()`` too, so a
-        per-file override that breaks either rule is caught as well.
+        order silently disappears. All of it runs for ``replace()`` too, so a
+        per-file override that breaks any rule is caught as well.
 
         Raises:
-            ScrubberError: If a tag is not a usable name, or if the three are
-                not all distinct.
+            ScrubberError: If a value is not the declared type, if a tag is
+                not a usable name, or if the three tags are not all distinct.
         """
+        for key, spec in self.KEYS.items():
+            reject_wrong_type(key, getattr(self, spec.field), spec.type)
+
         named = {
             'clear-tag': self.clear_tag,
             'omit-tag': self.omit_tag,
@@ -181,11 +245,12 @@ class ScrubbingOptions:
         this instance's value.
 
         Raises:
-            ScrubberError: If the merged tags are not all distinct.
+            ScrubberError: If an override is not the declared type, or if the
+                merged tags are not all distinct.
         """
         return replace(
             self,
-            **{field: data[key] for key, field in self.KEYS.items() if key in data},
+            **{spec.field: data[key] for key, spec in self.KEYS.items() if key in data},
         )
 
     @classmethod
@@ -193,8 +258,8 @@ class ScrubbingOptions:
         """Create ScrubbingOptions from a config mapping.
 
         Raises:
-            ScrubberError: If ``data`` contains an unrecognised key or the
-                resulting tags are not all distinct.
+            ScrubberError: If ``data`` contains an unrecognised key, a value
+                of the wrong type, or tags that are not all distinct.
         """
         reject_unknown_keys(data, cls.KEYS, 'option')
         return cls().merged_with(data)
@@ -209,10 +274,14 @@ class FileEntry:
     options: ScrubbingOptions = field(default_factory=ScrubbingOptions)
     notes_file: Path | None = None
 
-    #: TOML keys a file entry accepts beyond the ScrubbingOptions keys.
-    OWN_KEYS: ClassVar[frozenset[str]] = frozenset(
-        {'input', 'output', 'notes-file'},
-    )
+    #: TOML keys a file entry accepts beyond the ScrubbingOptions keys, and
+    #: the type each value has to be. All three name a path, and a path is
+    #: something TOML can only spell as a string.
+    OWN_KEYS: ClassVar[dict[str, type]] = {
+        'input': str,
+        'output': str,
+        'notes-file': str,
+    }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], defaults: ScrubbingOptions) -> Self:
@@ -222,24 +291,40 @@ class FileEntry:
 
         Raises:
             ScrubberError: If input or output is missing, a key is
-                unrecognised, or the resolved tags are not all distinct.
+                unrecognised, a value is not the declared type, notes-file is
+                empty, or the resolved tags are not all distinct.
         """
         reject_unknown_keys(
             data,
-            cls.OWN_KEYS | ScrubbingOptions.KEYS.keys(),
+            cls.OWN_KEYS.keys() | ScrubbingOptions.KEYS.keys(),
             'file entry key',
         )
+        for key, expected in cls.OWN_KEYS.items():
+            if key in data:
+                reject_wrong_type(key, data[key], expected)
+
         if 'input' not in data:
             raise ScrubberError('File entry missing required field: input')
         if 'output' not in data:
             raise ScrubberError('File entry missing required field: output')
 
-        notes_file = data.get('notes-file')
+        # Presence, not truthiness, like every other key here. That leaves
+        # nowhere for an empty notes-file to mean "no notes file": it is a
+        # path that was asked for and cannot be written, so it is an error.
+        notes_file = None
+        if 'notes-file' in data:
+            if not data['notes-file']:
+                raise ScrubberError(
+                    'notes-file must not be empty; omit the key entirely for '
+                    'no notes file',
+                )
+            notes_file = Path(data['notes-file'])
+
         return cls(
             input=Path(data['input']),
             output=Path(data['output']),
             options=defaults.merged_with(data),
-            notes_file=Path(notes_file) if notes_file else None,
+            notes_file=notes_file,
         )
 
 

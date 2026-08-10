@@ -15,16 +15,6 @@ from .project import scrub_files
 
 _DEFAULTS = ScrubbingOptions()
 
-#: What each scrubbing option does, by its config-file key. The keys come from
-#: ScrubbingOptions.KEYS, which is the single source of truth for which options
-#: exist; an option added there needs a line here to describe itself.
-_OPTION_HELP: dict[str, str] = {
-    'clear-tag': 'Tag marking cells to clear',
-    'clear-text': 'Text for cleared cells where unspecified',
-    'omit-tag': 'Tag marking cells to omit entirely',
-    'note-tag': 'Option name marking cells to save to notes',
-}
-
 
 def printe(*args: object, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)  # noqa: T201
@@ -102,12 +92,12 @@ class ScrubNotebook:
     name = 'scrub-notebook'
 
     def set_args(self, parser: argparse.ArgumentParser) -> None:
-        for key, name in ScrubbingOptions.KEYS.items():
+        for key, spec in ScrubbingOptions.KEYS.items():
             parser.add_argument(
                 f'--{key}',
-                dest=name,
-                default=getattr(_DEFAULTS, name),
-                help=_OPTION_HELP[key],
+                dest=spec.field,
+                default=getattr(_DEFAULTS, spec.field),
+                help=spec.help,
             )
         parser.add_argument(
             '--notes-file',
@@ -131,7 +121,8 @@ class ScrubNotebook:
 
             options = ScrubbingOptions(
                 **{
-                    name: getattr(args, name) for name in ScrubbingOptions.KEYS.values()
+                    spec.field: getattr(args, spec.field)
+                    for spec in ScrubbingOptions.KEYS.values()
                 },
             )
 
