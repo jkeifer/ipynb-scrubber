@@ -1,11 +1,16 @@
-"""Notes rendering, which is pure, and the atomic write the front ends use."""
+"""Notes rendering, which is pure, and the staged write the front ends use."""
 
 import pytest
 
 from ipynb_scrubber import staging
-from ipynb_scrubber.exceptions import ScrubberError
+from ipynb_scrubber.exceptions import MissingNotesDestinationError
 from ipynb_scrubber.notes import render_notes, require_destination
-from ipynb_scrubber.staging import write_atomic
+from ipynb_scrubber.staging import commit_all, stage
+
+
+def write(path, content):
+    """Stage and commit one file, which is what both front ends do to notes."""
+    commit_all([stage(path, content)])
 
 
 def test_content_is_fenced_as_python_by_default():
@@ -53,13 +58,13 @@ def test_each_note_is_fenced_independently():
 
 def test_notes_survive_a_round_trip_through_a_written_file(tmp_path):
     path = tmp_path / 'notes.md'
-    write_atomic(path, render_notes({'ex-1': 'x = "café ☕"'}))
+    write(path, render_notes({'ex-1': 'x = "café ☕"'}))
     assert 'café ☕' in path.read_text(encoding='utf-8')
 
 
 def test_write_creates_parent_directories(tmp_path):
     path = tmp_path / 'nested' / 'deeper' / 'notes.md'
-    write_atomic(path, render_notes({'ex-1': 'x = 1'}))
+    write(path, render_notes({'ex-1': 'x = 1'}))
     assert path.exists()
 
 
@@ -69,7 +74,7 @@ def test_write_error_surfaces_as_an_oserror(tmp_path):
     blocker.write_text('not a directory')
 
     with pytest.raises(FileExistsError):
-        write_atomic(blocker / 'notes.md', render_notes({'ex-1': 'x = 1'}))
+        write(blocker / 'notes.md', render_notes({'ex-1': 'x = 1'}))
 
 
 def test_a_file_that_cannot_be_moved_into_place_leaves_no_temp_file(
@@ -84,30 +89,27 @@ def test_a_file_that_cannot_be_moved_into_place_leaves_no_temp_file(
     monkeypatch.setattr(staging, 'commit', boom)
 
     with pytest.raises(OSError, match='rename failed'):
-        write_atomic(tmp_path / 'notes.md', render_notes({'ex-1': 'x = 1'}))
+        write(tmp_path / 'notes.md', render_notes({'ex-1': 'x = 1'}))
 
     assert list(tmp_path.iterdir()) == []
 
 
 def test_require_destination_accepts_notes_with_somewhere_to_go(tmp_path):
-    require_destination({'ex-1': 'x = 1'}, tmp_path / 'n.md', 'scrub-note', 'Remedy.')
+    require_destination(1, tmp_path / 'n.md', 'scrub-note')
 
 
 def test_require_destination_ignores_an_absent_destination_with_no_notes():
     """No notes means nothing to lose, so no destination is needed."""
-    require_destination({}, None, 'scrub-note', 'Remedy.')
+    require_destination(0, None, 'scrub-note')
 
 
-def test_require_destination_names_the_tag_the_count_and_the_remedy():
-    with pytest.raises(ScrubberError) as exc_info:
-        require_destination(
-            {'a': '1', 'b': '2'},
-            None,
-            'my-note',
-            'Pass --notes-file PATH.',
-        )
+def test_require_destination_names_the_tag_and_the_count_but_no_remedy():
+    """The remedy is the front end's to add, so the core states only the fault."""
+    with pytest.raises(MissingNotesDestinationError) as exc_info:
+        require_destination(2, None, 'my-note')
 
     message = str(exc_info.value)
     assert '2 cell(s)' in message
     assert 'my-note' in message
-    assert 'Pass --notes-file PATH.' in message
+    assert exc_info.value.note_count == 2
+    assert exc_info.value.note_tag == 'my-note'

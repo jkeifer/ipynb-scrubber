@@ -139,7 +139,9 @@ output = "{tmp_path / 'output.ipynb'}"
     result = scrub_project(cwd=str(tmp_path))
 
     assert result.returncode == 1
-    assert 'Invalid JSON' in result.stderr
+    # The path is named once, by the batch wrapper; the parse failure itself
+    # does not know where the bytes came from.
+    assert f'Error processing {input_path}: Invalid notebook JSON' in result.stderr
 
 
 def test_input_that_is_a_directory_reports_os_error(tmp_path: Path, scrub_project):
@@ -708,7 +710,7 @@ output = "{tmp_path / 'output.ipynb'}"
     def boom(*args, **kwargs):
         raise MemoryError('out of memory')
 
-    monkeypatch.setattr(project, 'dumps_notebook', boom)
+    monkeypatch.setattr(project, 'scrub', boom)
 
     with pytest.raises(MemoryError):
         ScrubProject()(argparse.Namespace(config_file=config))
