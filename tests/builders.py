@@ -1,9 +1,13 @@
 """Test data builders.
 
 Plain functions, not fixtures. They have no setup or teardown, so making them
-fixtures only meant every test that wanted one had to accept it as a parameter
--- which is why two test modules had reimplemented them locally. conftest.py
-exposes them as fixtures too, for the tests already written that way.
+fixtures would only mean every test that wanted one had to accept it as a
+parameter. Import them instead.
+
+They build *well-formed* notebooks. A test that needs a malformed one -- no
+cell_type, a non-list 'cells', tags that are not an array of strings -- should
+write the literal it means, because filling in boilerplate is exactly what
+those tests are checking does not happen.
 """
 
 from typing import Any
