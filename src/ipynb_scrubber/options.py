@@ -18,14 +18,13 @@ MARKDOWN_SUFFIX = '-->'
 #: option, indented relative to it.
 _BLOCK_STYLES = frozenset({'|', '>'})
 
-#: What YAML tags a scalar it reads as text. An option name has to carry this
-#: tag to arrive as the name it was written as.
-_STRING_TAG = 'tag:yaml.org,2002:str'
-
 
 @dataclass(frozen=True)
 class Option:
     """An option this tool defines, as the header parser needs to know it.
+
+    ``name`` is a name ``ScrubbingOptions`` has already vetted, so a key that
+    spells it is a key YAML reads back as that same text.
 
     ``takes_text`` says whether the option's value is text the author wrote.
     That is the one thing the parser needs beyond the name: text can be eaten
@@ -339,36 +338,6 @@ def _reject_commented_values(
         _reject_commented_value(key.value, value, lines)
 
 
-def _reject_unreadable_names(
-    entries: Collection[tuple[yaml.ScalarNode, yaml.Node]],
-) -> None:
-    """Refuse an option whose name YAML does not read back as text.
-
-    YAML resolves a handful of plain words to something other than a string:
-    ``yes`` and ``no`` are booleans, ``null`` is nothing at all. A tag
-    configured under one of those names is written as a key but does not arrive
-    as one, so nothing looking the option up by name would find it and the
-    instruction would be dropped without a word. Quoting the name in the header
-    keeps it text.
-
-    Only this tool's own names are looked at. A neighbour writing ``12:`` has
-    written a name this tool could not read either, but reading it is not this
-    tool's job.
-
-    Raises:
-        ProcessingError: If an option's name resolves to something other than
-            the text it was written as.
-    """
-    for key, _ in entries:
-        if key.tag == _STRING_TAG:
-            continue
-        raise ProcessingError(
-            f"Option '{key.value}' is not read as text by YAML, so it never "
-            'arrives as the option it spells: a few plain words resolve to '
-            f'another type. Quote the name (\'"{key.value}": ...\')',
-        )
-
-
 def _block_styled(node: yaml.MappingNode) -> frozenset[str]:
     """The names of the options written as a block scalar."""
     return frozenset(
@@ -520,7 +489,6 @@ def _read(split: _Split, options: Collection[Option]) -> Header:
             split.header,
             frozenset(option.name for option in options if option.takes_text),
         )
-        _reject_unreadable_names(ours)
 
         return Header(
             data,
@@ -566,8 +534,8 @@ def parse_cell_options(
     Raises:
         ProcessingError: If the header is not well-formed YAML, if one holding
             no mapping still names an option, or if an option this tool defines
-            is repeated, is not read back as text, or, where it takes text, has
-            its value eaten by a YAML comment.
+            is repeated or, where it takes text, has its value eaten by a YAML
+            comment.
     """
     build = _HEADERS.get(cell_type)
     if build is None:
