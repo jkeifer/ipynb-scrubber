@@ -378,10 +378,12 @@ Cell 1: Option 'scrub-omit' is missing its colon. The cell option header is
 YAML and an option is a 'name: value' entry, so write 'scrub-omit:'
 ```
 
-The header is shared with whatever else writes in the same comments, so a
-header that reads as YAML but names no scrubber option is left alone: a
-`#|-----` divider, a neighbour's repeated `fig-cap:`, and a `#| 12: hello`
-whose name is not text all yield no options rather than failing the run.
+The header is shared with whatever else writes in the same comments, so
+ownership is settled one entry at a time: only an entry whose key is a scrubber
+option is the tool's to read, or to complain about. A `#|-----` divider, a
+neighbour's repeated `fig-cap:`, and a `#| 12: hello` whose name is not text
+are all left alone rather than failing the run — including in a header that
+carries a scrubber option too.
 
 Ownership is read off the parsed header, never guessed from the raw text. Only
 a key names an option, so neither a scrubber name buried in a longer key

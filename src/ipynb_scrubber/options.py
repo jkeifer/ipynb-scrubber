@@ -18,6 +18,10 @@ MARKDOWN_SUFFIX = '-->'
 #: option, indented relative to it.
 _BLOCK_STYLES = frozenset({'|', '>'})
 
+#: What YAML tags a scalar it reads as text. An option name has to carry this
+#: tag to arrive as the name it was written as.
+_STRING_TAG = 'tag:yaml.org,2002:str'
+
 
 @dataclass(frozen=True)
 class Option:
@@ -224,20 +228,25 @@ def _not_a_mapping(data: Any) -> ProcessingError:
     )
 
 
-def _reject_repeated_names(node: yaml.MappingNode, prefix: str = '') -> None:
+def _reject_repeated_names(
+    entries: Collection[tuple[yaml.Node, yaml.Node]],
+    prefix: str = '',
+) -> None:
     """Refuse a name that the header carries more than once.
 
     YAML resolves a repeated name by keeping the last one. In an option header
     that silently discards an instruction the author wrote, so a repeat is
-    reported instead. An option written as a mapping is descended into, because
-    everything under such a name belongs to the option too and a repeat there
-    is lost the same way.
+    reported instead. ``entries`` are the header's entries this tool owns; an
+    option written as a mapping is descended into whole, because everything
+    under such a name belongs to the option too and a repeat there is lost the
+    same way. Whether a neighbour may repeat its own name is not this tool's
+    call, so nothing else is looked at.
 
     Raises:
         ProcessingError: If a name appears more than once at any level.
     """
     seen: set[tuple[str, str]] = set()
-    for key, value in node.value:
+    for key, value in entries:
         if not isinstance(key, yaml.ScalarNode):
             continue
         # The tag is part of the identity: quoted '12' and bare 12 are the
@@ -249,7 +258,7 @@ def _reject_repeated_names(node: yaml.MappingNode, prefix: str = '') -> None:
             )
         seen.add(identity)
         if isinstance(value, yaml.MappingNode):
-            _reject_repeated_names(value, f'{prefix}{key.value}.')
+            _reject_repeated_names(value.value, f'{prefix}{key.value}.')
 
 
 def _reject_commented_value(name: str, value: yaml.Node, lines: list[str]) -> None:
@@ -281,7 +290,7 @@ def _reject_commented_value(name: str, value: yaml.Node, lines: list[str]) -> No
 
 
 def _reject_commented_values(
-    node: yaml.MappingNode,
+    entries: Collection[tuple[yaml.ScalarNode, yaml.Node]],
     text: str,
     names: Collection[str],
 ) -> None:
@@ -293,20 +302,20 @@ def _reject_commented_values(
     keeps whatever came before the ``#``, or falls back to its default when
     nothing did.
 
-    Only the options that take text are checked: an option carrying no value
-    has nothing for a comment to eat, and telling its author to quote a value
-    they never wrote is advice that leads nowhere. The entries of an option
-    written as a mapping are checked too, because everything under such a name
-    belongs to the option. Names the tool does not define are somebody else's
-    to read, and a comment beside one of those is left alone.
+    ``entries`` are the header's entries this tool owns, and ``names`` narrows
+    those to the options that take text: an option carrying no value has
+    nothing for a comment to eat, and telling its author to quote a value they
+    never wrote is advice that leads nowhere. The entries of an option written
+    as a mapping are checked too, because everything under such a name belongs
+    to the option.
 
     Raises:
         ProcessingError: If an option's value is followed by a comment.
     """
     lines = text.split('\n')
 
-    for key, value in node.value:
-        if not isinstance(key, yaml.ScalarNode) or key.value not in names:
+    for key, value in entries:
+        if key.value not in names:
             continue
         if isinstance(value, yaml.MappingNode):
             for entry, entry_value in value.value:
@@ -318,6 +327,36 @@ def _reject_commented_values(
                     )
             continue
         _reject_commented_value(key.value, value, lines)
+
+
+def _reject_unreadable_names(
+    entries: Collection[tuple[yaml.ScalarNode, yaml.Node]],
+) -> None:
+    """Refuse an option whose name YAML does not read back as text.
+
+    YAML resolves a handful of plain words to something other than a string:
+    ``yes`` and ``no`` are booleans, ``null`` is nothing at all. A tag
+    configured under one of those names is written as a key but does not arrive
+    as one, so nothing looking the option up by name would find it and the
+    instruction would be dropped without a word. Quoting the name in the header
+    keeps it text.
+
+    Only this tool's own names are looked at. A neighbour writing ``12:`` has
+    written a name this tool could not read either, but reading it is not this
+    tool's job.
+
+    Raises:
+        ProcessingError: If an option's name resolves to something other than
+            the text it was written as.
+    """
+    for key, _ in entries:
+        if key.tag == _STRING_TAG:
+            continue
+        raise ProcessingError(
+            f"Option '{key.value}' is not read as text by YAML, so it never "
+            'arrives as the option it spells: a few plain words resolve to '
+            f'another type. Quote the name (\'"{key.value}": ...\')',
+        )
 
 
 def _block_styled(node: yaml.MappingNode) -> frozenset[str]:
@@ -369,17 +408,16 @@ def _kept_header(
 
 
 def _claims_a_name(node: yaml.Node, lines: list[str], names: Collection[str]) -> bool:
-    """Whether the header writes one of ``names`` where an option would go.
+    """Whether a header holding no mapping still writes one of ``names``.
 
-    In a mapping — a header written the way headers are written — only a key
-    names an option, so a name that merely appears in somebody else's value is
-    not this tool's to claim.
-
-    Any other shape is a header the author already got wrong, and there the
-    reading leans the other way: a missed claim leaves the cell unscrubbed,
-    which for ``scrub-omit`` means shipping the solution. So a scalar counts
-    when the line it opens on is a name, not only when the value it resolved to
-    is one.
+    A header that holds a mapping never asks this: its keys say plainly which
+    of its entries are this tool's, and ownership is read off those. What is
+    left is a header the author already got wrong, where nothing sits where an
+    option would go, and there the reading leans the other way: a missed claim
+    leaves the cell unscrubbed, which for ``scrub-omit`` means shipping the
+    solution. So a name counts wherever it is written — as a key, as an item of
+    a list, or on the line a plain scalar opens on, since such a scalar
+    swallows the lines below it and resolves to a value that names nothing.
     """
     if isinstance(node, yaml.MappingNode):
         return any(_claims_a_name(key, lines, names) for key, _ in node.value)
@@ -417,57 +455,7 @@ def _loader(text: str) -> Iterator[yaml.SafeLoader]:
         loader.dispose()
 
 
-def _build(
-    loader: yaml.SafeLoader,
-    node: yaml.Node,
-    split: _Split,
-    options: Collection[Option],
-) -> Header:
-    """The Header a composed node graph describes.
-
-    Raises:
-        yaml.YAMLError: If the graph's values cannot be built. That is a
-            malformed header like one that never parsed, and it is left to the
-            caller to say so, so there is one place that turns YAML's
-            complaints into advice.
-        ProcessingError: If the graph is not one mapping of text names, repeats
-            a name, or lets a YAML comment eat an option's value.
-    """
-    names = {option.name for option in options}
-    data = loader.construct_document(node)
-
-    if not isinstance(node, yaml.MappingNode):
-        opener = _opening_line(node, split.header.split('\n'))
-        if opener in names:
-            raise _missing_colon(opener)
-        raise _not_a_mapping(data)
-
-    _reject_repeated_names(node)
-    _reject_commented_values(
-        node,
-        split.header,
-        frozenset(option.name for option in options if option.takes_text),
-    )
-
-    unnamed = [key for key in data if not isinstance(key, str)]
-    if unnamed:
-        raise ProcessingError(
-            'Cell option names must be text, but the header carries '
-            f'{unnamed[0]!r}. Quote it if it was meant as a name',
-        )
-
-    return Header(
-        data,
-        _block_styled(node),
-        kept=_kept_header(node, split, names),
-    )
-
-
-def _read(
-    split: _Split,
-    options: Collection[Option],
-    names: frozenset[str],
-) -> Header:
+def _read(split: _Split, options: Collection[Option]) -> Header:
     """The Header the split's header text describes, from a single parse.
 
     One loader yields both the node graph and the values, so there is one
@@ -475,28 +463,60 @@ def _read(
     that resolved values drop: which scalars are block scalars, where each
     value stopped, and which names were written as keys.
 
-    A header that names none of ``names`` is not this tool's to reject, so a
-    complaint about one yields no options instead. Only this tool's own
-    complaints are filtered that way: whether the text is YAML at all is not a
-    question about ownership, so a failure from YAML passes through untouched.
+    The values are built before anything is decided about the header, because
+    YAML gives up on some documents only once it starts turning parsed text
+    into values. That is a malformed header rather than a question about
+    ownership, so the failure is left to pass through.
+
+    Ownership is then settled once, ahead of every check: the entries whose
+    keys are this tool's names are picked off the mapping, and each check below
+    reads those alone, so each complaint it makes is honestly about an option
+    this tool defines. A header holding no mapping has no keys to read
+    ownership off, and is judged whole.
 
     Raises:
         yaml.YAMLError: If the header is not well-formed YAML, whether that
             surfaces while parsing it or while building its values.
-        ProcessingError: If it is well-formed but names one of ``names``
-            wrongly.
+        ProcessingError: If it is well-formed but names one of this tool's
+            options wrongly.
     """
+    names = {option.name for option in options}
+
     with _loader(split.header) as loader:
         node = loader.get_single_node()
         if node is None:
             return Header()
 
-        try:
-            return _build(loader, node, split, options)
-        except ProcessingError:
-            if _claims_a_name(node, split.header.split('\n'), names):
-                raise
-            return Header()
+        data = loader.construct_document(node)
+
+        if not isinstance(node, yaml.MappingNode):
+            lines = split.header.split('\n')
+            if not _claims_a_name(node, lines, names):
+                return Header()
+            opener = _opening_line(node, lines)
+            if opener in names:
+                raise _missing_colon(opener)
+            raise _not_a_mapping(data)
+
+        ours = [
+            (key, value)
+            for key, value in node.value
+            if isinstance(key, yaml.ScalarNode) and key.value in names
+        ]
+
+        _reject_repeated_names(ours)
+        _reject_commented_values(
+            ours,
+            split.header,
+            frozenset(option.name for option in options if option.takes_text),
+        )
+        _reject_unreadable_names(ours)
+
+        return Header(
+            data,
+            _block_styled(node),
+            kept=_kept_header(node, split, names),
+        )
 
 
 def parse_cell_options(
@@ -514,12 +534,18 @@ def parse_cell_options(
     comment syntax to hide a header in always yield an empty header.
 
     ``options`` are the options this tool defines. The header is shared with
-    whatever else writes in the same comments, so a header that parses but
-    names none of them is left alone: a ``#|-----`` divider and a neighbour's
-    repeated key both yield no options rather than failing the run. Ownership
-    is read off the parsed graph, never guessed from the raw text, so a name
-    inside a longer key or in somebody else's value cannot hand this tool a
-    header it does not own.
+    whatever else writes in the same comments, so ownership is settled once,
+    off the parsed keys, and every complaint made here is about an entry whose
+    key is one of ``options``. A neighbour's repeated key, non-text key, or
+    commented-out value is theirs to make sense of, and is left alone even in a
+    header this tool does read an option out of. Reading ownership off the keys
+    rather than the raw text is what keeps a name inside a longer key, or in
+    somebody else's value, from handing this tool a header it does not own.
+
+    A header holding no mapping has no keys to read ownership off, so there a
+    name written anywhere in it counts: a ``#|-----`` divider names none and
+    yields no options, while a colonless ``scrub-omit`` is reported rather than
+    passed over, since passing it over ships the cell it was meant to remove.
 
     A header that is not well-formed YAML is reported whether or not it names
     an option, and whether YAML gives up on parsing the text or on building the
@@ -528,9 +554,10 @@ def parse_cell_options(
     either way.
 
     Raises:
-        ProcessingError: If the header is not well-formed YAML, or if one
-            naming an option is not a mapping of text names, repeats a name, or
-            lets a YAML comment eat the value of an option that takes text.
+        ProcessingError: If the header is not well-formed YAML, if one holding
+            no mapping still names an option, or if an option this tool defines
+            is repeated, is not read back as text, or, where it takes text, has
+            its value eaten by a YAML comment.
     """
     build = _HEADERS.get(cell_type)
     if build is None:
@@ -541,9 +568,8 @@ def parse_cell_options(
     if not split.header.strip():
         return Header(body=split.body)
 
-    names = frozenset(option.name for option in options)
     try:
-        header = _read(split, options, names)
+        header = _read(split, options)
     except yaml.YAMLError as e:
         # YAML could not read the header through, so there is no graph to say
         # whose it is. Guessing from the raw text claims headers that merely
