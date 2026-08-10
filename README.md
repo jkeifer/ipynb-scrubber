@@ -18,8 +18,9 @@ removing instructor-only content.
 
 - **Clear solution cells**: Replace cell contents with placeholder text while
   preserving structure
-- **Save notes**: Collect code cell contents before clearing and save to a separate
-  Markdown file for instructor reference with bidirectional linking
+- **Save notes**: Collect code cell contents below the option header before
+  clearing and save to a separate Markdown file for instructor reference with
+  bidirectional linking
 - **Custom replacement text**: Use cell-specific text instead of default placeholder
 - **Multi-line replacement content**: Write replacement text spanning several
   lines with a YAML block scalar
@@ -30,6 +31,9 @@ removing instructor-only content.
   as the YAML they are
 - **Preserve structure**: Maintain notebook structure and metadata, and carry
   through any fields this tool does not interpret
+- **Keep other cell options**: A code cell's `#|` header is shared, so a
+  scrubbed cell keeps the directives that are not this tool's, such as Quarto's
+  `#| echo: false`
 - **Clear all outputs**: Remove all cell outputs and execution counts for a
   clean slate
 - **Project-wide processing**: Process multiple notebooks with a single command
@@ -73,8 +77,19 @@ ipynb-scrubber scrub-notebook < input.ipynb > output.ipynb
 - `--notes-file PATH`: Path to write the notes file, required if any cell
   carries the note tag (see [Notes Files](#notes-files))
 
-The three names must differ from one another. Pointing two of them at the same
-string would make a marked cell ambiguous, so it is rejected:
+Each of the three names must start with a letter and contain only letters,
+digits, hyphens and underscores. A name is written as a YAML key in a cell's
+option header as well as a Jupyter metadata tag, so it has to survive that
+round trip as itself — an empty name, one containing whitespace, or one
+leading with punctuation is rejected:
+
+```text
+clear-tag must start with a letter and contain only letters, digits, hyphens
+and underscores, but got 'my tag'
+```
+
+The three names must also differ from one another. Pointing two of them at the
+same string would make a marked cell ambiguous, so it is rejected:
 
 ```text
 clear-tag, omit-tag and note-tag must all be distinct, but got
@@ -180,10 +195,12 @@ Unknown keys anywhere in the config — the top level, `[options]`, or a
 lists the valid ones, so a misspelled `clear-tagg` fails the run instead of
 silently leaving solution cells unscrubbed.
 
-`clear-tag`, `omit-tag` and `note-tag` must differ from one another, both in
-`[options]` and after a `[[files]]` entry's overrides are applied. An entry
-that overrides one tag onto the value of another inherited from `[options]`
-is rejected on that basis.
+`clear-tag`, `omit-tag` and `note-tag` must each be a usable name — starting
+with a letter and containing only letters, digits, hyphens and underscores —
+and must differ from one another. Both rules are checked in `[options]` and
+again after a `[[files]]` entry's overrides are applied, so an entry that
+overrides one tag onto the value of another inherited from `[options]` is
+rejected on that basis.
 
 **Option 2: Using `pyproject.toml`**
 
@@ -255,7 +272,8 @@ with open('lecture.ipynb') as f:
 exercise, notes = process_notebook(notebook, ScrubbingOptions())
 ```
 
-`notes` maps each note id to the original source of the cell it came from.
+`notes` maps each note id to the original source of the cell it came from,
+below that cell's option header.
 `ScrubbingOptions` carries the same four settings as the CLI flags, so
 `ScrubbingOptions(clear_text='# YOUR CODE HERE')` mirrors
 `--clear-text '# YOUR CODE HERE'`.
@@ -319,11 +337,42 @@ option is a `name: value` entry, the colon is required even when there is no
 value, and values follow YAML's rules for quoting, typing and multi-line text.
 Names the tool does not define, including Quarto's own options, are ignored.
 
+An option name written without its colon is an error, because a bare name is
+not an option at all. It is a plain YAML scalar, and a plain scalar swallows
+the lines below it, so a `#| scrub-omit` sitting above a note to self folds
+into the one string `scrub-omit note to self`. Rather than read that as a
+comment about omitting, the tool says what is missing:
+
+```text
+Cell 1: Option 'scrub-omit' is missing its colon. The cell option header is
+YAML and an option is a 'name: value' entry, so write 'scrub-omit:'
+```
+
 The header is shared with whatever else writes in the same comments, so a
-header that names no scrubber option is left alone: a `#|-----` divider or a
-`#| fig-cap: A: B` that YAML cannot read yields no options rather than failing
-the run. Once a scrubber option is named, the whole header must be readable
-YAML, because an option the tool cannot see is an answer shipped to students.
+header that reads as YAML but names no scrubber option is left alone: a
+`#|-----` divider, a neighbour's repeated `fig-cap:`, and a `#| 12: hello`
+whose name is not text all yield no options rather than failing the run.
+
+Ownership is read off the parsed header, never guessed from the raw text. Only
+a key names an option, so neither a scrubber name buried in a longer key
+(`my-scrub-omit-helper:`) nor one appearing in somebody else's value
+(`fig-cap: see scrub-note docs`) hands the tool a header it does not own.
+
+A header that is not well-formed YAML is reported whether or not it names a
+scrubber option. There is no parsed header to read ownership off, guessing from
+the raw text would claim headers that merely look like this tool's, and Quarto
+reads the same `#|` block as YAML, so text that malformed is broken for
+whoever else writes there too. A `#| fig-cap: A: B` therefore fails the run:
+
+```text
+Cell 1: Invalid cell option header: line 1 has a second ':' in its value. The
+header is YAML, so a value containing ':' or '#' has to be quoted (name:
+"Figure 1: a plot")
+```
+
+An unquoted `:` in a value is much the likeliest way a header stops being YAML,
+because a caption like `fig-cap: Figure 1: Temperature` is the natural thing to
+write. Quoting it is what Quarto asks for too, so the fix serves both readers.
 
 #### Code Cells - Quarto Options
 
@@ -420,6 +469,11 @@ naming the option, so text is never lost in silence. Both spellings keep the
 #|   # TODO: your code here
 ```
 
+Only the options that carry text are guarded this way. An option carrying no
+value has nothing for a comment to cut short, so `#| scrub-omit: # some
+comment` is fine. A comment beside a name the tool does not define is somebody
+else's to read and is left alone too.
+
 Quoting is what other awkward text needs too: text starting with `*`, `&`,
 `!`, `|`, `>`, `[`, `{`, `%`, `@` or `` ` ``, and text containing `: `.
 Quoting is always safe, so quote when in doubt.
@@ -466,8 +520,18 @@ option's own indentation is a sibling option instead of block content:
 ```
 
 A cell's source header may carry at most one scrubber option, so that mistake
-fails the run rather than quietly deleting the cell. Options that are not
-scrubber options, such as Quarto's own, remain valid siblings:
+fails the run rather than quietly deleting the cell. When one of the options
+present opened a block, the message names it, since that is the line the
+content belongs under:
+
+```text
+Cell 1: only one scrubber option per cell, but found scrub-clear, scrub-omit.
+If one of these was meant as content of 'scrub-clear', indent it more deeply
+than that option's line
+```
+
+Options that are not scrubber options, such as Quarto's own, remain valid
+siblings:
 
 ```python
 #| scrub-note: ex-1
@@ -500,15 +564,27 @@ thing on its line, the content follows, and a line containing only `-->` closes
 the header. Blank lines up to it are kept verbatim, as in the example above. A
 comment that is never closed is an error.
 
-Repeating an option name within one cell's header is an error, as is reusing
-the same `scrub-note` id anywhere in a notebook. Either would otherwise resolve
-by keeping the last one, which in the note case discards an instructor
-solution.
+Repeating a name within one cell's header is an error, as is reusing the same
+`scrub-note` id anywhere in a notebook. Either would otherwise resolve by
+keeping the last one, which in the note case discards an instructor solution.
+The check descends into an option written as a mapping, because everything
+under such a name belongs to the option too, and the repeat is named with the
+path to it:
+
+```text
+Cell 1: Duplicate option 'scrub-note.id' in cell option header
+```
 
 Combining scrubber options in one header is an error rather than a precedence
-puzzle. Metadata tags are unaffected: a cell tagged both `scrub-omit` and
-`scrub-note` is still simply omitted, and a `scrub-omit` tag still wins over a
-`#| scrub-note:` in source.
+puzzle. Metadata tags are not subject to that rule. A tag carries presence and
+nothing else, which is exactly what an option written with no value carries, so
+tags and header options merge into one set and a single precedence order —
+omit, then note, then clear — covers both. The header wins where both name the
+same option, so a cell tagged both `scrub-omit` and `scrub-note` is still
+simply omitted, and a `scrub-omit` tag still wins over a `#| scrub-note:` in
+source. A tag does not paper over a bad header, though: a cell tagged
+`scrub-omit` whose header says `#| scrub-omit: something` fails, because
+`scrub-omit` takes no value.
 
 #### Quoting and Escapes
 
@@ -544,12 +620,53 @@ def add(a, b):
 
 A `\n` in a TOML *literal* string (single quotes) stays literal.
 
+### Other Options in the Header
+
+**In a code cell, only this tool's own options are removed.** The `#|` header
+is shared, so the directives belonging to whoever else writes there configure
+the cell that remains rather than the content that was replaced. They ride into
+the output above the replacement text, in the order they were written:
+
+```python
+#| echo: false
+#| scrub-clear: "# TODO: your code here"
+#| fig-cap: A caption
+def add(a, b):
+    return a + b
+```
+
+becomes
+
+```python
+#| echo: false
+#| fig-cap: A caption
+# TODO: your code here
+```
+
+An option owns every line from its own key down to the next key, which is what
+keeps a block scalar's content with the option that opened it: the lines under
+a `#| scrub-clear: |` go when it does, and the lines under a neighbour's block
+scalar stay when it stays.
+
+Options written below the scrubber option are kept as readily as those above
+it; everything kept sits above the replacement text. A cell with no other
+options in its header gains no header at all, and its output is exactly the
+replacement text. The same applies to `scrub-note`, whose reference comment is
+written under the kept lines, and to a `scrub-clear` metadata tag on a cell
+whose header holds nothing but somebody else's options. `scrub-omit` is
+unaffected either way, since the whole cell goes.
+
+**This is code cells only.** A markdown cell's header is still replaced whole:
+the `<!--` and `-->` delimiters are not options, so they cannot be rebuilt from
+the lines that survive, and nothing but this tool writes options in a markdown
+cell's comments anyway. A `<!-- scrub-clear: TODO -->` yields just `TODO`.
+
 ### Notes Files
 
 **Code cells only** - A code cell carrying a `#| scrub-note: <id>` option has
-its content saved to a separate Markdown file before being cleared from the
-student version. This creates bidirectional linking between the exercise and
-solutions.
+its content below the header saved to a separate Markdown file before being
+cleared from the student version. This creates bidirectional linking between
+the exercise and solutions.
 
 Markdown notes are not supported. The reference text inserted into the cleared
 cell is `# (See notes: <id>)`, which renders as a heading rather than a
@@ -622,6 +739,29 @@ cells, `scrub-notebook` requires `--notes-file` and `scrub-project` requires
 Scrubbing a note cell replaces its body with a `# (See notes: <id>)` pointer, so
 producing the exercise notebook without the notes file it points at would leave
 that reference dangling.
+
+**The note is the cell's content below the header, not the header itself.** The
+header is an instruction to this tool rather than part of the cell, and a
+`scrub-note` carrying `text` holds the very scaffolding the student is meant to
+fill in, so filing it with the note would put the exercise prompt directly
+above the answer it is a prompt for. This cell:
+
+```python
+#| scrub-note:
+#|   id: exercise-1
+#|   text: |
+#|     def solve():
+#|         pass
+def solve():
+    return 42
+```
+
+saves only its body:
+
+```python
+def solve():
+    return 42
+```
 
 **Note bodies are fenced in the notebook's own language,** read from
 `metadata.language_info.name` or `metadata.kernelspec.language`. A notebook that
@@ -743,6 +883,9 @@ print("Exercise: implement the functions below")
   metadata
 - **Unrecognized fields are carried through**: Notebook and cell keys this tool
   does not interpret are passed to the output untouched
+- **Other cell options are carried through**: Clearing a code cell removes only
+  the lines its own options occupy, so the rest of the `#|` header survives
+  above the replacement text. A markdown cell's header is replaced whole
 - **A notebook is scrubbed whole or not at all**: An error anywhere in a
   notebook means no output for it, rather than a partially scrubbed result
 - **Outputs are written atomically**: Each file is written beside its target and
