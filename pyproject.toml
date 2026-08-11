@@ -24,6 +24,7 @@ Repository = 'https://github.com/jkeifer/ipynb-scrubber'
 
 [dependency-groups]
 dev = [
+    "jupytext>=1.16",
     "mypy>=1.17",
     "nbformat>=5.11.0",
     "pre-commit>=4.2",
