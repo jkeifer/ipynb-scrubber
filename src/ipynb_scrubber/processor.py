@@ -61,11 +61,18 @@ def process_notebook(
             raise ProcessingError(f'Cell {index}: {e}') from e
 
     metadata = validated.get('metadata', {})
-    result = evolve(
-        validated,
-        cells=processed,
-        metadata=evolve(metadata, exercise_version=True),
-    )
+    # The changes target Notebook, a TypedDict, so they are typed as one and
+    # unpacked -- rather than passed as keywords -- to get mypy's key and
+    # value-type checking back; evolve's **changes: Any would otherwise wave
+    # a misspelled key or a wrong value through unchecked. The inner
+    # evolve(metadata, ...) call targets a plain dict[str, Any], which an
+    # annotated changes mapping would not check either way, so it stays a
+    # keyword argument.
+    changes: Notebook = {
+        'cells': processed,
+        'metadata': evolve(metadata, exercise_version=True),
+    }
+    result = evolve(validated, **changes)
     return result, {note_id: source for note_id, (_, source) in notes.items()}
 
 

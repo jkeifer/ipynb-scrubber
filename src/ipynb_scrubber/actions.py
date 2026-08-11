@@ -414,11 +414,16 @@ def _without_scrubber_tags(cell: Cell, names: frozenset[str]) -> Cell:
     if len(kept) == len(tags):
         return cell
 
+    # metadata's target is a plain dict[str, Any], not a TypedDict, so an
+    # annotated changes mapping here would check nothing; it stays a keyword
+    # argument. cell's target is Cell, a TypedDict, so its changes are typed
+    # and unpacked to get mypy's key and value-type checking back.
     updated = evolve(metadata, tags=kept)
     if not kept:
         del updated['tags']
 
-    return evolve(cell, metadata=updated)
+    changes: Cell = {'metadata': updated}
+    return evolve(cell, **changes)
 
 
 @dataclass(frozen=True)
