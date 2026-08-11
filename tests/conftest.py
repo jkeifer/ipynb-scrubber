@@ -2,9 +2,9 @@ import functools
 import subprocess
 import sys
 
-import pytest
+from pathlib import Path
 
-from ipynb_scrubber import staging
+import pytest
 
 
 @pytest.fixture(scope='session')
@@ -47,7 +47,7 @@ def failing_commit(monkeypatch):
     still runs -- that cleanup is what the tests using this are checking.
     """
 
-    def boom(staged):
+    def boom(self, target):
         raise OSError('rename failed')
 
-    monkeypatch.setattr(staging, '_commit', boom)
+    monkeypatch.setattr(Path, 'replace', boom)
