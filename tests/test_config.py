@@ -61,13 +61,9 @@ def test_config_resolves_options_per_file():
 
 def test_every_registered_option_gets_a_cli_flag():
     """The registry is the single source of truth, including for the CLI."""
-    import argparse
+    from ipynb_scrubber.cli import build_parser
 
-    from ipynb_scrubber.cli import ScrubNotebook
-
-    parser = argparse.ArgumentParser()
-    ScrubNotebook().set_args(parser)
-    args = parser.parse_args([])
+    args = build_parser().parse_args(['scrub-notebook'])
 
     for option in OPTIONS:
         assert getattr(args, option.field) == getattr(ScrubbingOptions(), option.field)
