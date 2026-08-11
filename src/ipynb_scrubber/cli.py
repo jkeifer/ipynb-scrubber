@@ -9,7 +9,7 @@ from typing import Any, ClassVar, NoReturn, Protocol
 
 from .actions import OPTIONS, ScrubbingOptions
 from .config import ProjectConfig
-from .exceptions import MissingNotesDestinationError, ScrubberError
+from .exceptions import MissingNotesDestinationError, ScrubberError, reporting
 from .notes import require_destination
 from .processor import scrub
 from .project import scrub_files
@@ -150,12 +150,10 @@ class ScrubNotebook:
                 **{option.field: getattr(args, option.field) for option in OPTIONS},
             )
 
-            try:
+            with reporting('Error reading input'):
                 # Read the raw bytes: a notebook's encoding is a property of
                 # the notebook, not of the locale the tool happens to run in.
                 data = sys.stdin.buffer.read()
-            except OSError as e:
-                raise ScrubberError(f'Error reading input: {e}') from e
 
             result = scrub(data, options)
 
@@ -167,11 +165,11 @@ class ScrubNotebook:
 
             with staged_batch() as staged:
                 if result.notes_text is not None:
-                    try:
+                    with reporting('Error writing notes file'):
                         staged.append(stage(notes_file, result.notes_text))
-                    except OSError as e:
-                        raise ScrubberError(f'Error writing notes file: {e}') from e
 
+                # Left explicit rather than given to ``reporting``: a failed
+                # write has to be discarded before anything else can raise.
                 try:
                     # Bytes again, for the same reason as stdin: the output
                     # encoding belongs to the notebook, not to the terminal it
@@ -185,10 +183,10 @@ class ScrubNotebook:
                 # Committed only now: notes are worth having only alongside the
                 # notebook they annotate, so a consumer that went away mid-write
                 # must not be left a notes file describing what it never got.
-                try:
+                with reporting(
+                    'Error writing notes file after the notebook reached stdout',
+                ):
                     commit_all(staged)
-                except OSError as e:
-                    raise ScrubberError(f'Error writing notes file: {e}') from e
 
         except ScrubberError as e:
             printe(f'Error: {e}')
