@@ -11,6 +11,7 @@ from .notebook import (
     Cell,
     Notebook,
     dumps_notebook,
+    evolve,
     get_notebook_language,
     loads_notebook,
     validate_notebook,
@@ -59,11 +60,12 @@ def process_notebook(
         except ScrubberError as e:
             raise ProcessingError(f'Cell {index}: {e}') from e
 
-    result: Notebook = {
-        **validated,
-        'cells': processed,
-        'metadata': {**validated.get('metadata', {}), 'exercise_version': True},
-    }
+    metadata = validated.get('metadata', {})
+    result = evolve(
+        validated,
+        cells=processed,
+        metadata=evolve(metadata, exercise_version=True),
+    )
     return result, {note_id: source for note_id, (_, source) in notes.items()}
 
 

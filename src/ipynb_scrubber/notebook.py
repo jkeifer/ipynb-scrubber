@@ -1,5 +1,6 @@
 import json
 
+from collections.abc import Mapping
 from typing import Any, Required, TypedDict, cast
 
 from .exceptions import InvalidNotebookError
@@ -27,6 +28,28 @@ class Notebook(TypedDict, total=False):
     metadata: dict[str, Any]
     nbformat: int
     nbformat_minor: int
+
+
+def evolve[M: Mapping[str, Any]](original: M, **changes: Any) -> M:
+    """A copy of ``original`` with ``changes`` applied, in ``original``'s class.
+
+    Rebuilding through ``type(original)`` rather than a dict literal is what
+    lets a notebook parsed by a library that subclasses dict -- nbformat's
+    ``NotebookNode``, and so jupytext -- be handed back to it to write. A plain
+    dict in gives a plain dict out, ``type({})`` being ``dict``.
+
+    Only the node being rebuilt is converted; its values ride along as they
+    are. ``NotebookNode`` coerces a mapping to its own class on assignment but
+    not through its constructor, so each node must be rebuilt where it is
+    built, rather than the whole notebook converted once at the end.
+
+    A class whose constructor will not take a single mapping cannot be rebuilt
+    and raises ``TypeError``. Falling back to a dict would be worse: the class
+    would go missing later, somewhere harder to trace back to here.
+    """
+    # type(original) is type[M], which the checker cannot know is constructible
+    # from a mapping. Every mapping this tool rebuilds is.
+    return type(original)({**original, **changes})  # type: ignore[call-arg]
 
 
 def get_notebook_language(notebook: Notebook) -> str | None:

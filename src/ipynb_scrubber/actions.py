@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Self, assert_never
 
 from .exceptions import ProcessingError, ScrubberError
-from .notebook import Cell, get_cell_source, to_cell_source
+from .notebook import Cell, evolve, get_cell_source, to_cell_source
 from .options import (
     Header,
     Option,
@@ -389,7 +389,7 @@ def _without_results(cell: Cell) -> Cell:
     nbformat schema, so they are emptied rather than removed; any other cell
     type must not carry them at all, so there they are dropped.
     """
-    updated: Cell = {**cell}
+    updated: Cell = evolve(cell)
 
     if updated.get('cell_type') == 'code':
         updated['outputs'] = []
@@ -414,11 +414,11 @@ def _without_scrubber_tags(cell: Cell, names: frozenset[str]) -> Cell:
     if len(kept) == len(tags):
         return cell
 
-    updated = {**metadata, 'tags': kept}
+    updated = evolve(metadata, tags=kept)
     if not kept:
         del updated['tags']
 
-    return {**cell, 'metadata': updated}
+    return evolve(cell, metadata=updated)
 
 
 @dataclass(frozen=True)
@@ -497,6 +497,8 @@ class Scrubber:
         placeholder, replaced by the note id; every other brace is left as
         written.
         """
+        # Both helpers rebuild the cell in its own class; neither may go back
+        # to a dict literal, or the class is lost for the cells that need it.
         updated = _without_results(_without_scrubber_tags(cell, self.names))
 
         match action:
