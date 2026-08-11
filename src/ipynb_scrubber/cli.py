@@ -9,7 +9,7 @@ from typing import Any, ClassVar, NoReturn
 
 from .actions import OPTIONS, ScrubbingOptions
 from .config import ProjectConfig
-from .exceptions import MissingNotesDestinationError, ScrubberError, reporting
+from .exceptions import ScrubberError, reporting
 from .notes import require_destination
 from .processor import scrub
 from .project import scrub_files
@@ -100,10 +100,12 @@ class ScrubNotebook:
             result = scrub(data, options)
 
             notes_file = args.notes_file
-            try:
-                require_destination(result.note_count, notes_file, options.note_tag)
-            except MissingNotesDestinationError as e:
-                raise ScrubberError(f'{e} Pass --notes-file PATH.') from e
+            require_destination(
+                result.note_count,
+                notes_file,
+                options.note_tag,
+                'Pass --notes-file PATH.',
+            )
 
             with staged_batch() as staged:
                 if result.notes_text is not None:
