@@ -68,7 +68,9 @@ class ScrubbingOptions:
     clear_tag: str = 'scrub-clear'
     clear_text: str = '# TODO: Implement this'
     clear_text_markdown: str = '*TODO: Implement this*'
+    clear_text_raw: str = 'TODO: Implement this'
     omit_tag: str = 'scrub-omit'
+    note_reference: str = '# (See notes: {id})'
     note_tag: str = 'scrub-note'
 
     def __post_init__(self) -> None:
@@ -335,6 +337,12 @@ OPTIONS: tuple[ScrubberOption, ...] = (
         build=_note_action,
     ),
     ScrubberOption(
+        'note-reference',
+        'note_reference',
+        str,
+        'Marker pointing a noted cell at its note, with {id} for the note id',
+    ),
+    ScrubberOption(
         'clear-tag',
         'clear_tag',
         str,
@@ -354,7 +362,24 @@ OPTIONS: tuple[ScrubberOption, ...] = (
         str,
         'Text for cleared markdown cells where unspecified',
     ),
+    ScrubberOption(
+        'clear-text-raw',
+        'clear_text_raw',
+        str,
+        'Text for cleared raw cells where unspecified',
+    ),
 )
+
+
+#: Which option holds the replacement text a cleared cell of each type gets,
+#: since no one spelling suits them all: the code text is a comment, which
+#: markdown renders as a heading and a raw cell emits verbatim as itself. Any
+#: cell type nbformat adds later falls back to the code text.
+_CLEAR_TEXT_FIELDS: dict[str, str] = {
+    'code': 'clear_text',
+    'markdown': 'clear_text_markdown',
+    'raw': 'clear_text_raw',
+}
 
 
 def _without_results(cell: Cell) -> Cell:
@@ -432,12 +457,11 @@ class Scrubber:
     def default_clear_text(self, cell_type: str) -> str:
         """The replacement text for a cleared cell whose author supplied none.
 
-        A placeholder has to read as the kind of cell it lands in: the code
-        default is a comment, which markdown would render as a heading.
+        :data:`_CLEAR_TEXT_FIELDS` picks it by cell type.
         """
-        if cell_type == 'markdown':
-            return self.opts.clear_text_markdown
-        return self.opts.clear_text
+        field = _CLEAR_TEXT_FIELDS.get(cell_type, _CLEAR_TEXT_FIELDS['code'])
+        text: str = getattr(self.opts, field)
+        return text
 
     def decide(self, cell: Cell) -> CellAction:
         """Decide what happens to a cell.
@@ -468,6 +492,10 @@ class Scrubber:
         """Return a new cell with ``action`` applied; ``cell`` is left alone.
 
         ``Omit`` is not accepted: an omitted cell has no output form.
+
+        A note's reference marker is ``note-reference`` with ``{id}``, its only
+        placeholder, replaced by the note id; every other brace is left as
+        written.
         """
         updated = _without_results(_without_scrubber_tags(cell, self.names))
 
@@ -478,7 +506,8 @@ class Scrubber:
                 source = _under_header(kept, text)
             case Note(note_id=note_id, text=text, header=kept):
                 suffix = f'\n{text}' if text else ''
-                source = _under_header(kept, f'# (See notes: {note_id}){suffix}')
+                reference = self.opts.note_reference.replace('{id}', note_id)
+                source = _under_header(kept, f'{reference}{suffix}')
             case _:
                 assert_never(action)
 
