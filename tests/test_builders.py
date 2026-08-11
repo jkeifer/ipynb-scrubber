@@ -12,7 +12,7 @@ from ipynb_scrubber.actions import Omit, Scrubber, ScrubbingOptions
 from tests.builders import code, markdown, raw, schema_valid_code
 
 OPTS = ScrubbingOptions()
-SCRUBBER = Scrubber.for_options(OPTS)
+SCRUBBER = Scrubber(OPTS)
 
 TAG_BUILDERS = [code, markdown, raw, schema_valid_code]
 TAG_BUILDER_IDS = [builder.__name__ for builder in TAG_BUILDERS]
