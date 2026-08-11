@@ -5,8 +5,11 @@ import json
 import subprocess
 import sys
 
+import pytest
+
+from ipynb_scrubber import cli
 from ipynb_scrubber.actions import OPTIONS, ScrubbingOptions
-from ipynb_scrubber.cli import ScrubNotebook
+from ipynb_scrubber.exceptions import ScrubberError
 from tests.builders import code, make_notebook, markdown, raw
 
 
@@ -200,7 +203,8 @@ def test_failed_notebook_write_survives_a_stdout_without_a_descriptor(
     for option in OPTIONS:
         setattr(args, option.field, getattr(ScrubbingOptions(), option.field))
 
-    assert ScrubNotebook()(args) == 1
+    with pytest.raises(ScrubberError, match='Error writing output'):
+        cli.scrub_notebook(args)
     assert not notes.exists()
     assert list(tmp_path.iterdir()) == []
 

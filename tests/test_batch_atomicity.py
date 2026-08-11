@@ -19,8 +19,7 @@ from typing import Any
 
 import pytest
 
-from ipynb_scrubber import project
-from ipynb_scrubber.cli import ScrubProject
+from ipynb_scrubber import cli, project
 from ipynb_scrubber.config import FileEntry
 from ipynb_scrubber.exceptions import ScrubberError
 from tests.builders import code, make_notebook
@@ -385,7 +384,7 @@ output = "{tmp_path / 'output.ipynb'}"
 
     assert result.returncode == 1
     assert 'Input file not found' in result.stderr
-    assert '✗' in result.stderr
+    assert 'Error: ' in result.stderr
 
 
 def test_invalid_json_in_notebook(tmp_path: Path, scrub_project):
@@ -475,4 +474,4 @@ output = "{tmp_path / 'output.ipynb'}"
     monkeypatch.setattr(project, 'scrub', boom)
 
     with pytest.raises(MemoryError):
-        ScrubProject()(argparse.Namespace(config_file=config))
+        cli.scrub_project(argparse.Namespace(config_file=config))

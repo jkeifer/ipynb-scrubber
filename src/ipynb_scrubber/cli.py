@@ -5,7 +5,7 @@ import sys
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, ClassVar, NoReturn
+from typing import Any, NoReturn
 
 from .actions import OPTIONS, ScrubbingOptions
 from .config import ProjectConfig
@@ -53,131 +53,61 @@ def _discard_unwritable_stdout() -> None:
         os.close(devnull)
 
 
-class ScrubNotebook:
-    help: ClassVar[str] = (
-        'Reads a Jupyter notebook from stdin, '
-        'processes it to clear cell outputs, '
-        'and writes the exercise version to stdout. '
-        'Cells tagged with the omit tag are omitted '
-        'from the exercise version, while those tagged '
-        'with the clear tag are cleared and a message '
-        'is added to indicate they are to be completed '
-        'by the user. A notes file, if one is asked for, '
-        'is written only once the exercise notebook has '
-        'reached stdout, so it never describes a notebook '
-        'that was never delivered.'
+def scrub_notebook(args: argparse.Namespace) -> None:
+    options = ScrubbingOptions(
+        **{option.field: getattr(args, option.field) for option in OPTIONS},
     )
-    name = 'scrub-notebook'
 
-    def set_args(self, parser: argparse.ArgumentParser) -> None:
-        for option in OPTIONS:
-            parser.add_argument(
-                f'--{option.key}',
-                dest=option.field,
-                default=getattr(_DEFAULTS, option.field),
-                help=option.help,
-            )
-        parser.add_argument(
-            '--notes-file',
-            type=Path,
-            default=None,
-            help=(
-                'Path to write notes file (required if any cell carries the note tag)'
-            ),
-        )
+    with reporting('Error reading input'):
+        # Read the raw bytes: a notebook's encoding is a property of the
+        # notebook, not of the locale the tool happens to run in.
+        data = sys.stdin.buffer.read()
 
-    def __call__(self, args: argparse.Namespace) -> int:
-        try:
-            options = ScrubbingOptions(
-                **{option.field: getattr(args, option.field) for option in OPTIONS},
-            )
+    result = scrub(data, options)
 
-            with reporting('Error reading input'):
-                # Read the raw bytes: a notebook's encoding is a property of
-                # the notebook, not of the locale the tool happens to run in.
-                data = sys.stdin.buffer.read()
-
-            result = scrub(data, options)
-
-            notes_file = args.notes_file
-            require_destination(
-                result.note_count,
-                notes_file,
-                options.note_tag,
-                'Pass --notes-file PATH.',
-            )
-
-            # The batch is committed where this block ends, which is after the
-            # notebook has reached stdout: notes are worth having only alongside
-            # the notebook they annotate, so a consumer that went away mid-write
-            # must not be left a notes file describing what it never got.
-            with staged_batch(
-                'Error writing notes file after the notebook reached stdout',
-            ) as staged:
-                if result.notes_text is not None:
-                    with reporting('Error writing notes file'):
-                        staged.append(stage(notes_file, result.notes_text))
-
-                # Left explicit rather than given to ``reporting``: a failed
-                # write has to be discarded before anything else can raise.
-                try:
-                    # Bytes again, for the same reason as stdin: the output
-                    # encoding belongs to the notebook, not to the terminal it
-                    # is piped into.
-                    sys.stdout.buffer.write(result.notebook_text.encode('utf-8'))
-                    sys.stdout.buffer.flush()
-                except OSError as e:
-                    _discard_unwritable_stdout()
-                    raise ScrubberError(f'Error writing output: {e}') from e
-
-        except ScrubberError as e:
-            printe(f'Error: {e}')
-            return 1
-        return 0
-
-
-class ScrubProject:
-    help: ClassVar[str] = (
-        'Executes notebook scrubbing using project configuration. '
-        'Searches for .ipynb-scrubber.toml or pyproject.toml with '
-        '[tool.ipynb-scrubber] section. The configured files are written '
-        'as a batch: if any one of them fails, none are written.'
+    notes_file = args.notes_file
+    require_destination(
+        result.note_count,
+        notes_file,
+        options.note_tag,
+        'Pass --notes-file PATH.',
     )
-    name = 'scrub-project'
 
-    def set_args(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            '--config-file',
-            default=None,
-            type=Path,
-            help=(
-                'Path to config file (default: searches for .ipynb-scrubber.toml '
-                'or pyproject.toml with [tool.ipynb-scrubber] section)'
-            ),
-        )
+    # The batch is committed where this block ends, which is after the notebook
+    # has reached stdout: notes are worth having only alongside the notebook
+    # they annotate, so a consumer that went away mid-write must not be left a
+    # notes file describing what it never got.
+    with staged_batch(
+        'Error writing notes file after the notebook reached stdout',
+    ) as staged:
+        if result.notes_text is not None:
+            with reporting('Error writing notes file'):
+                staged.append(stage(notes_file, result.notes_text))
 
-    def __call__(self, args: argparse.Namespace) -> int:
+        # Left explicit rather than given to ``reporting``: a failed write has
+        # to be discarded before anything else can raise.
         try:
-            if args.config_file is None:
-                config = ProjectConfig.discover()
-            else:
-                config = ProjectConfig.from_file(args.config_file)
-        except ScrubberError as e:
-            printe(f'Error: {e}')
-            return 1
+            # Bytes again, for the same reason as stdin: the output encoding
+            # belongs to the notebook, not to the terminal it is piped into.
+            sys.stdout.buffer.write(result.notebook_text.encode('utf-8'))
+            sys.stdout.buffer.flush()
+        except OSError as e:
+            _discard_unwritable_stdout()
+            raise ScrubberError(f'Error writing output: {e}') from e
 
-        try:
-            scrub_files(config.files)
-        except ScrubberError as e:
-            printe(f'✗ {e}')
-            return 1
 
-        # Reported only once the batch is committed, which is the moment each
-        # of these lines becomes true.
-        for file_entry in config.files:
-            printe(f'✓ Processed: {file_entry.input} → {file_entry.output}')
+def scrub_project(args: argparse.Namespace) -> None:
+    if args.config_file is None:
+        config = ProjectConfig.discover()
+    else:
+        config = ProjectConfig.from_file(args.config_file)
 
-        return 0
+    scrub_files(config.files)
+
+    # Reported only once the batch is committed, which is the moment each of
+    # these lines becomes true.
+    for file_entry in config.files:
+        printe(f'✓ Processed: {file_entry.input} → {file_entry.output}')
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -191,11 +121,56 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.metavar = '[command]'
 
-    commands: list[ScrubNotebook | ScrubProject] = [ScrubNotebook(), ScrubProject()]
-    for command in commands:
-        subparser = subparsers.add_parser(command.name, help=command.help)
-        command.set_args(subparser)
-        subparser.set_defaults(_cmd=command)
+    notebook = subparsers.add_parser(
+        'scrub-notebook',
+        help=(
+            'Reads a Jupyter notebook from stdin, '
+            'processes it to clear cell outputs, '
+            'and writes the exercise version to stdout. '
+            'Cells tagged with the omit tag are omitted '
+            'from the exercise version, while those tagged '
+            'with the clear tag are cleared and a message '
+            'is added to indicate they are to be completed '
+            'by the user. A notes file, if one is asked for, '
+            'is written only once the exercise notebook has '
+            'reached stdout, so it never describes a notebook '
+            'that was never delivered.'
+        ),
+    )
+    for option in OPTIONS:
+        notebook.add_argument(
+            f'--{option.key}',
+            dest=option.field,
+            default=getattr(_DEFAULTS, option.field),
+            help=option.help,
+        )
+    notebook.add_argument(
+        '--notes-file',
+        type=Path,
+        default=None,
+        help='Path to write notes file (required if any cell carries the note tag)',
+    )
+    notebook.set_defaults(_run=scrub_notebook)
+
+    project = subparsers.add_parser(
+        'scrub-project',
+        help=(
+            'Executes notebook scrubbing using project configuration. '
+            'Searches for .ipynb-scrubber.toml or pyproject.toml with '
+            '[tool.ipynb-scrubber] section. The configured files are written '
+            'as a batch: if any one of them fails, none are written.'
+        ),
+    )
+    project.add_argument(
+        '--config-file',
+        default=None,
+        type=Path,
+        help=(
+            'Path to config file (default: searches for .ipynb-scrubber.toml '
+            'or pyproject.toml with [tool.ipynb-scrubber] section)'
+        ),
+    )
+    project.set_defaults(_run=scrub_project)
 
     return parser
 
@@ -209,7 +184,12 @@ def cli(argv: Sequence[str] | None = None) -> NoReturn:
         parser.print_help()
         sys.exit(2)
 
-    sys.exit(args._cmd(args))
+    try:
+        args._run(args)
+    except ScrubberError as e:
+        printe(f'Error: {e}')
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == '__main__':
