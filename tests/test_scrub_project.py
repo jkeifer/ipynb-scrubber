@@ -1,7 +1,9 @@
 import argparse
 import json
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -30,7 +32,12 @@ def sample_notebook():
     )
 
 
-def write(path: Path, notebook: dict) -> None:
+def write(path: Path, notebook: Mapping[str, Any]) -> None:
+    """Serialize a notebook to ``path``.
+
+    Typed as a Mapping rather than a dict because the builders return the
+    ``Notebook`` TypedDict, which is a Mapping but not a ``dict[Any, Any]``.
+    """
     path.write_text(json.dumps(notebook))
 
 
