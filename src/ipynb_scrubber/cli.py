@@ -5,7 +5,7 @@ import sys
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, ClassVar, NoReturn, Protocol
+from typing import Any, ClassVar, NoReturn
 
 from .actions import OPTIONS, ScrubbingOptions
 from .config import ProjectConfig
@@ -51,64 +51,6 @@ def _discard_unwritable_stdout() -> None:
         os.dup2(devnull, fileno)
     finally:
         os.close(devnull)
-
-
-class Command(Protocol):
-    help: ClassVar[str] = ''
-
-    @property
-    def name(self) -> str: ...
-
-    def set_args(self, parser: argparse.ArgumentParser) -> None: ...
-
-    def __call__(self, args: argparse.Namespace) -> int: ...
-
-
-class CLI:
-    def __init__(
-        self,
-        *commands: Command,
-        prog: str | None = None,
-        description: str | None = None,
-    ) -> None:
-        self.parser = argparse.ArgumentParser(
-            prog=prog,
-            description=description,
-            formatter_class=argparse.RawTextHelpFormatter,
-        )
-        self._subparsers = self.parser.add_subparsers(
-            title='commands',
-            dest='command',
-        )
-        self._subparsers.metavar = '[command]'
-
-        for command in commands:
-            self.add_command(command)
-
-    def add_command(self, command: Command) -> None:
-        parser = self._subparsers.add_parser(
-            command.name,
-            help=command.help,
-        )
-        command.set_args(parser)
-        parser.set_defaults(_cmd=command)
-
-    def _process_args(
-        self,
-        argv: Sequence[str] | None = None,
-    ) -> argparse.Namespace:
-        args: argparse.Namespace = self.parser.parse_args(argv)
-
-        if args.command is None:
-            printe('error: command required')
-            self.parser.print_help()
-            sys.exit(2)
-
-        return args
-
-    def __call__(self, argv: Sequence[str] | None = None) -> NoReturn:
-        args = self._process_args(argv)
-        sys.exit(args._cmd(args))
 
 
 class ScrubNotebook:
@@ -238,16 +180,36 @@ class ScrubProject:
         return 0
 
 
-def _cli() -> CLI:
-    return CLI(
-        ScrubNotebook(),
-        ScrubProject(),
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
         description='Scrub notebooks to create exercise versions',
+        formatter_class=argparse.RawTextHelpFormatter,
     )
+    subparsers = parser.add_subparsers(
+        title='commands',
+        dest='command',
+    )
+    subparsers.metavar = '[command]'
+
+    commands: list[ScrubNotebook | ScrubProject] = [ScrubNotebook(), ScrubProject()]
+    for command in commands:
+        subparser = subparsers.add_parser(command.name, help=command.help)
+        command.set_args(subparser)
+        subparser.set_defaults(_cmd=command)
+
+    return parser
 
 
-def cli() -> None:
-    _cli()()
+def cli(argv: Sequence[str] | None = None) -> NoReturn:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command is None:
+        printe('error: command required')
+        parser.print_help()
+        sys.exit(2)
+
+    sys.exit(args._cmd(args))
 
 
 if __name__ == '__main__':
