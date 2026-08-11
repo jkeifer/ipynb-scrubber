@@ -144,16 +144,37 @@ class ScrubbingOptions:
         return cls().merged_with(data)
 
 
+#: Which option holds the replacement text a cleared cell of each type gets,
+#: since no one spelling suits them all: the code text is a comment, which
+#: markdown renders as a heading and a raw cell emits verbatim as itself. Any
+#: cell type nbformat adds later falls back to the code text.
+_CLEAR_TEXT_FIELDS: dict[str, str] = {
+    'code': 'clear_text',
+    'markdown': 'clear_text_markdown',
+    'raw': 'clear_text_raw',
+}
+
+
 @dataclass(frozen=True)
 class _Marked:
     """A cell an option was found on, as the builders below need to see it."""
 
-    scrubber: Scrubber
+    opts: ScrubbingOptions
     cell_type: str
     #: Names carried as metadata tags, so a builder can tell which spelling
     #: its option arrived in.
     tags: frozenset[str]
     header: Header
+
+    @property
+    def default_clear_text(self) -> str:
+        """The replacement text for a cleared cell whose author supplied none.
+
+        :data:`_CLEAR_TEXT_FIELDS` picks it by cell type.
+        """
+        field = _CLEAR_TEXT_FIELDS.get(self.cell_type, _CLEAR_TEXT_FIELDS['code'])
+        text: str = getattr(self.opts, field)
+        return text
 
 
 #: How an option's value becomes the action it describes.
@@ -199,7 +220,7 @@ def _note_action(value: Any, marked: _Marked) -> Note:
             cell, an unusable id, or non-string text.
         ScrubberError: On an undefined key.
     """
-    opts = marked.scrubber.opts
+    opts = marked.opts
 
     if opts.note_tag in marked.tags:
         raise ProcessingError(
@@ -273,8 +294,7 @@ def _omit_action(value: Any, marked: _Marked) -> Omit:
     """
     if value is not None:
         raise ProcessingError(
-            f"Option '{marked.scrubber.opts.omit_tag}' takes no value, "
-            f'but got {value!r}',
+            f"Option '{marked.opts.omit_tag}' takes no value, but got {value!r}",
         )
     return Omit()
 
@@ -287,9 +307,9 @@ def _clear_action(value: Any, marked: _Marked) -> Clear:
     """
     return Clear(
         _replacement_text(
-            marked.scrubber.opts.clear_tag,
+            marked.opts.clear_tag,
             value,
-            marked.scrubber.default_clear_text(marked.cell_type),
+            marked.default_clear_text,
         ),
         marked.header.kept,
     )
@@ -371,17 +391,6 @@ OPTIONS: tuple[ScrubberOption, ...] = (
 )
 
 
-#: Which option holds the replacement text a cleared cell of each type gets,
-#: since no one spelling suits them all: the code text is a comment, which
-#: markdown renders as a heading and a raw cell emits verbatim as itself. Any
-#: cell type nbformat adds later falls back to the code text.
-_CLEAR_TEXT_FIELDS: dict[str, str] = {
-    'code': 'clear_text',
-    'markdown': 'clear_text_markdown',
-    'raw': 'clear_text_raw',
-}
-
-
 def _without_results(cell: Cell) -> Cell:
     """A copy of ``cell`` carrying none of the results of having been run.
 
@@ -459,15 +468,6 @@ class Scrubber:
             names=frozenset(name for name, _, _ in marking),
         )
 
-    def default_clear_text(self, cell_type: str) -> str:
-        """The replacement text for a cleared cell whose author supplied none.
-
-        :data:`_CLEAR_TEXT_FIELDS` picks it by cell type.
-        """
-        field = _CLEAR_TEXT_FIELDS.get(cell_type, _CLEAR_TEXT_FIELDS['code'])
-        text: str = getattr(self.opts, field)
-        return text
-
     def decide(self, cell: Cell) -> CellAction:
         """Decide what happens to a cell.
 
@@ -485,7 +485,7 @@ class Scrubber:
         _check_one_scrubber_option(header, self.names)
 
         cell_options: dict[str, Any] = {**dict.fromkeys(tags), **header.options}
-        marked = _Marked(self, cell_type, frozenset(tags), header)
+        marked = _Marked(self.opts, cell_type, frozenset(tags), header)
 
         for name, build in self.markers:
             if name in cell_options:
