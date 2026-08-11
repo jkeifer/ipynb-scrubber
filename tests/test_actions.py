@@ -286,11 +286,32 @@ def test_apply_note_with_empty_text_omits_the_newline():
     assert result['source'] == '# (See notes: ex-1)'
 
 
+def test_apply_note_uses_the_configured_reference():
+    """A kernel whose comment syntax is not '#' needs its own marker."""
+    scrubber = Scrubber.for_options(
+        ScrubbingOptions(note_reference='// (See notes: {id})'),
+    )
+    cell = {'cell_type': 'code', 'source': 'x = 1'}
+    result = scrubber.apply(cell, Note('ex-1', '', ''))
+    assert result['source'] == '// (See notes: ex-1)'
+
+
+def test_apply_note_reference_substitutes_only_the_id():
+    """A literal brace is text, not a field: str.format would raise on it."""
+    scrubber = Scrubber.for_options(
+        ScrubbingOptions(note_reference='# {see} (See notes: {id})'),
+    )
+    cell = {'cell_type': 'code', 'source': 'x = 1'}
+    result = scrubber.apply(cell, Note('ex-1', '', ''))
+    assert result['source'] == '# {see} (See notes: ex-1)'
+
+
 @pytest.mark.parametrize(
     ('cell_type', 'expected'),
     [
         ('code', '# TODO: Implement this'),
         ('markdown', '*TODO: Implement this*'),
+        ('raw', 'TODO: Implement this'),
     ],
 )
 def test_default_clear_text_suits_the_cell_type(cell_type, expected):

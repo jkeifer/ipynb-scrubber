@@ -98,6 +98,48 @@ def test_markdown_clear_text_is_overridable_per_file():
     assert entry.options.clear_text_markdown == '_mine_'
 
 
+def test_raw_clear_text_is_a_separate_option():
+    """A raw cell is emitted verbatim, so its placeholder carries no markup."""
+    defaults = ScrubbingOptions()
+    assert defaults.clear_text_raw == 'TODO: Implement this'
+    assert defaults.clear_text_raw != defaults.clear_text
+
+
+def test_raw_clear_text_is_configurable_globally():
+    opts = ScrubbingOptions.from_dict({'clear-text-raw': 'do this'})
+    assert opts.clear_text_raw == 'do this'
+
+
+def test_raw_clear_text_is_overridable_per_file():
+    entry = FileEntry.from_dict(
+        {
+            'input': 'a.ipynb',
+            'output': 'b.ipynb',
+            'clear-text-raw': 'mine',
+        },
+        ScrubbingOptions(clear_text_raw='global'),
+    )
+    assert entry.options.clear_text_raw == 'mine'
+
+
+def test_note_reference_is_configurable_globally():
+    """The marker is a comment, and not every kernel spells one with '#'."""
+    opts = ScrubbingOptions.from_dict({'note-reference': '// (See notes: {id})'})
+    assert opts.note_reference == '// (See notes: {id})'
+
+
+def test_note_reference_is_overridable_per_file():
+    entry = FileEntry.from_dict(
+        {
+            'input': 'a.ipynb',
+            'output': 'b.ipynb',
+            'note-reference': '-- see {id}',
+        },
+        ScrubbingOptions(note_reference='# see {id}'),
+    )
+    assert entry.options.note_reference == '-- see {id}'
+
+
 @pytest.mark.parametrize('key', [option.key for option in OPTIONS])
 @pytest.mark.parametrize('value', [5, None, 1.5, True, ['x'], {'a': 1}])
 def test_option_values_of_the_wrong_type_are_rejected(key, value):

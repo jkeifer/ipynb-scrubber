@@ -7,7 +7,7 @@ import sys
 
 from ipynb_scrubber.actions import OPTIONS, ScrubbingOptions
 from ipynb_scrubber.cli import ScrubNotebook
-from tests.builders import code, make_notebook, markdown
+from tests.builders import code, make_notebook, markdown, raw
 
 
 def test_invalid_json_input_exits_nonzero(scrub_notebook):
@@ -59,6 +59,29 @@ def test_clear_text_markdown_flag_is_accepted(scrub_notebook):
         input_data=json.dumps(nb),
     )
     assert result.returncode == 0
+
+
+def test_clear_text_raw_flag_reaches_the_options(scrub_notebook):
+    nb = make_notebook(raw('secret', tags=['scrub-clear']))
+    result = scrub_notebook(
+        '--clear-text-raw',
+        'FILL THIS IN',
+        input_data=json.dumps(nb),
+    )
+    assert json.loads(result.stdout)['cells'][0]['source'] == 'FILL THIS IN'
+
+
+def test_note_reference_flag_reaches_the_options(tmp_path, scrub_notebook):
+    nb = make_notebook(code('#| scrub-note: ex-1\nsecret = 1'))
+    result = scrub_notebook(
+        '--note-reference',
+        '// (See notes: {id})',
+        '--notes-file',
+        str(tmp_path / 'notes.md'),
+        input_data=json.dumps(nb),
+    )
+    source = json.loads(result.stdout)['cells'][0]['source']
+    assert source.startswith('// (See notes: ex-1)')
 
 
 def test_note_tag_flag_reaches_the_options(scrub_notebook):

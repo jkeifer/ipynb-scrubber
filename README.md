@@ -71,19 +71,25 @@ ipynb-scrubber scrub-notebook < input.ipynb > output.ipynb
 - `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
 - `--note-tag TAG`: Option name marking cells to save to notes
   (default: `scrub-note`)
+- `--note-reference TEXT`: Marker pointing a noted cell at its note, with
+  `{id}` replaced by the note id (default: `# (See notes: {id})`)
 - `--clear-tag TAG`: Tag marking cells to clear (default: `scrub-clear`)
 - `--clear-text TEXT`: Replacement text for cleared cells where unspecified
   (default: `# TODO: Implement this`)
 - `--clear-text-markdown TEXT`: Replacement text for cleared markdown cells
   where unspecified (default: `*TODO: Implement this*`)
+- `--clear-text-raw TEXT`: Replacement text for cleared raw cells where
+  unspecified (default: `TODO: Implement this`)
 - `--notes-file PATH`: Path to write the notes file, required if any cell
   carries the note tag (see [Notes Files](#notes-files))
 
-A placeholder has to read as the kind of cell it lands in, which is why
-markdown gets its own default. The code default is a comment, and a comment
+A placeholder has to read as the kind of cell it lands in, which is why each
+cell type gets its own default. The code default is a comment, and a comment
 dropped into a markdown cell renders as a heading rather than as the note to
-the student it is meant to be. Code and raw cells use `--clear-text`; markdown
-cells use `--clear-text-markdown`.
+the student it is meant to be, while a raw cell is passed through verbatim to
+the output format, where a `#` marks nothing at all. Code cells use
+`--clear-text`, markdown cells `--clear-text-markdown`, and raw cells
+`--clear-text-raw`, whose default carries no markup.
 
 Each of the three tag names must start with a letter and contain only letters,
 digits, hyphens and underscores. A name is written as a YAML key in a cell's
@@ -177,7 +183,9 @@ Create a `.ipynb-scrubber.toml` file with global options and file entries:
 clear-tag = "scrub-clear"
 clear-text = "# TODO: Implement this"
 clear-text-markdown = "*TODO: Implement this*"
+clear-text-raw = "TODO: Implement this"
 omit-tag = "scrub-omit"
+note-reference = "# (See notes: {id})"
 note-tag = "scrub-note"
 
 # File entries (required - at least one)
@@ -205,7 +213,9 @@ Each file entry supports:
 - `clear-tag` (optional): Override global clear tag
 - `clear-text` (optional): Override global clear text
 - `clear-text-markdown` (optional): Override global markdown clear text
+- `clear-text-raw` (optional): Override global raw clear text
 - `omit-tag` (optional): Override global omit tag
+- `note-reference` (optional): Override global note reference marker
 - `note-tag` (optional): Override global note tag
 - `notes-file` (optional): Path to write the notes file for this notebook
 
@@ -264,7 +274,9 @@ Add configuration to your existing `pyproject.toml` under
 clear-tag = "scrub-clear"
 clear-text = "# TODO: Implement this"
 clear-text-markdown = "*TODO: Implement this*"
+clear-text-raw = "TODO: Implement this"
 omit-tag = "scrub-omit"
+note-reference = "# (See notes: {id})"
 note-tag = "scrub-note"
 
 # File entries (required - at least one)
@@ -331,7 +343,7 @@ exercise, notes = process_notebook(notebook, ScrubbingOptions())
 
 `notes` maps each note id to the original source of the cell it came from,
 below that cell's option header.
-`ScrubbingOptions` carries the same five settings as the CLI flags, so
+`ScrubbingOptions` carries the same settings as the CLI flags, so
 `ScrubbingOptions(clear_text='# YOUR CODE HERE')` mirrors
 `--clear-text '# YOUR CODE HERE'`.
 
@@ -567,9 +579,12 @@ cleared content:
 - `<!-- scrub-clear: Your custom text -->` (markdown cells)
 - Empty text: `#| scrub-clear: ""` (results in empty cell)
 
-An option written with no value at all — `#| scrub-clear:` — uses the
-configured default for the kind of cell it is in: `--clear-text` in a code or
-raw cell, `--clear-text-markdown` in a markdown cell.
+An option written with no value at all — `#| scrub-clear:` in a code cell,
+`<!-- scrub-clear: -->` in a markdown cell, or the `scrub-clear` metadata tag
+in any cell — uses the configured default for the kind of cell it is in:
+`--clear-text` in a code cell, `--clear-text-markdown` in a markdown cell,
+`--clear-text-raw` in a raw cell. A raw cell has no comment syntax to hide a
+header in, so the metadata tag is the only spelling that reaches one.
 
 **Replacement text containing `#` must be quoted or written as a block
 scalar.** In YAML an unquoted `#` opens a comment that runs to the end of the
@@ -786,9 +801,8 @@ cleared from the student version. This creates bidirectional linking between
 the exercise and solutions.
 
 Markdown notes are not supported. The reference text inserted into the cleared
-cell is `# (See notes: <id>)`, which renders as a heading rather than a
-comment in a markdown cell, so supporting them requires a per-cell-type
-reference format.
+cell is one marker for the whole run — `--note-reference` — so supporting them
+requires a per-cell-type reference format rather than a single one.
 
 **There is no `scrub-note` cell tag.** Unlike `scrub-clear` and `scrub-omit`,
 the option is source-only: a note needs an id, and a Jupyter metadata tag has
@@ -841,6 +855,11 @@ added:
 
 This creates a clear link from the exercise notebook to the notes file.
 
+The marker is `--note-reference` (config key `note-reference`), in which `{id}`
+— its only placeholder — is replaced by the note id; every other brace is left
+as written. The default is a Python comment, so a kernel commenting with `//`
+or `--` needs its own, for example `--note-reference '// (See notes: {id})'`.
+
 **Note ids must be unique within a notebook.** Reusing one is an error that
 names both cells involved, for example:
 
@@ -853,7 +872,7 @@ unique within a notebook
 cells, `scrub-notebook` requires `--notes-file` and `scrub-project` requires
 `notes-file` on that entry; without one the run fails and nothing is written.
 
-Scrubbing a note cell replaces its body with a `# (See notes: <id>)` pointer, so
+Scrubbing a note cell replaces its body with a `note-reference` pointer, so
 producing the exercise notebook without the notes file it points at would leave
 that reference dangling.
 
