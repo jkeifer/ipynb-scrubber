@@ -43,7 +43,8 @@ removing instructor-only content.
   half-finished tree
 - **Flexible CLI**: Unix-style stdin/stdout for single files, or config-based
   batch processing for projects
-- **Python API**: Drive the same scrubbing from code (see
+- **Python API**: Drive the same scrubbing from code, on bytes or on a notebook
+  you have already parsed — with jupytext or nbformat, for instance (see
   [Python API](#python-api))
 
 ## Installation
@@ -312,6 +313,7 @@ from ipynb_scrubber import (
     FileEntry,
     InvalidNotebookError,
     Notebook,
+    NotebookScrubResult,
     ProcessingError,
     ProjectConfig,
     ScrubberError,
@@ -320,6 +322,7 @@ from ipynb_scrubber import (
     process_notebook,
     scrub,
     scrub_files,
+    scrub_parsed,
 )
 ```
 
@@ -363,6 +366,38 @@ opts = ScrubbingOptions()
 opts.merged_with({'clear-text': '# YOUR CODE HERE'})  # by config key
 dataclasses.replace(opts, clear_text='# YOUR CODE HERE')  # by field name
 ```
+
+### Using with jupytext
+
+`scrub_parsed` is the whole pipeline bar the parsing and the serializing. It
+takes a notebook you have already parsed and hands it back in the class it
+arrived as, so the library that read it is the library that writes it:
+
+```python
+import jupytext
+
+from ipynb_scrubber import ScrubbingOptions, scrub_parsed
+
+notebook = jupytext.reads(Path('lesson.py').read_text(), fmt='py:percent')
+result = scrub_parsed(notebook, ScrubbingOptions())
+
+Path('exercise.py').write_text(jupytext.writes(result.notebook, fmt='py:percent'))
+if result.notes_text is not None:
+    Path('notes.md').write_text(result.notes_text)
+```
+
+`result` is a `NotebookScrubResult`, carrying the same `notes_text` and
+`note_count` a `ScrubResult` does, with the notebook as an object rather than
+as text.
+
+Neither jupytext nor nbformat is a dependency of this package. Nothing here is
+specific to either: `scrub_parsed` works just as well on a notebook from
+`nbformat.read()`, from `json.load()`, or built by hand. It works because every
+mapping the pipeline rebuilds is rebuilt in the class it arrived as, and a
+plain dict in gives a plain dict out.
+
+Use `process_notebook` instead when you want the notes as a mapping of note id
+to source rather than as a rendered document.
 
 ### Scrubbing a notebook end to end
 
