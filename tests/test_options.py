@@ -363,6 +363,17 @@ def test_malformed_header_raises_without_leaking_the_yaml_error() -> None:
     assert 'line 1' in str(exc.value)
 
 
+def test_a_header_of_only_whitespace_yields_no_options() -> None:
+    """Regression: a header with no content is never handed to YAML.
+
+    A marker followed by a tab carries nothing, so there is nothing to read and
+    nothing to refuse. Asking YAML anyway gets the tab rejected and the author
+    told to fix an indentation they never wrote.
+    """
+    assert options('code', '#|\t\nprint("x")') == {}
+    assert options('markdown', '<!-- \t -->\n## Q') == {}
+
+
 def test_header_of_only_comments_yields_no_options() -> None:
     assert options('code', '#| # just a note to self\nprint("x")') == {}
 
@@ -384,6 +395,12 @@ def test_block_styled_is_empty_without_a_block() -> None:
     assert block_styled('code', '#| scrub-clear: hello') == frozenset()
     assert block_styled('code', '#| scrub-clear: "a | b"') == frozenset()
     assert block_styled('raw', '#| scrub-clear: |') == frozenset()
+
+
+def test_block_styled_leaves_a_neighbour_out() -> None:
+    """How somebody else writes their own option is not this tool's to report."""
+    source = '#| fig-cap: |\n#|   a\n#| scrub-clear: b\nprint("x")'
+    assert block_styled('code', source) == frozenset()
 
 
 def test_a_comment_eating_a_whole_value_raises() -> None:

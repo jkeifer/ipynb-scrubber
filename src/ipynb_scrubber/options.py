@@ -67,7 +67,8 @@ class Header:
     """
 
     options: dict[str, Any] = field(default_factory=dict)
-    #: The options written as a block scalar.
+    #: Which of this tool's own options are written as a block scalar. A
+    #: neighbour's block style is the neighbour's business, so it is not here.
     block_styled: frozenset[str] = frozenset()
     body: str = ''
     #: Header source lines belonging to somebody else's options, which are part
@@ -214,29 +215,75 @@ def _describe(error: yaml.YAMLError, text: str) -> str:
     return f'Invalid cell option header: {error}'
 
 
-def _reject_repeated_names(
-    entries: Collection[tuple[yaml.Node, yaml.Node]],
-    prefix: str = '',
-) -> None:
+# Everything below reads the header's geometry off PyYAML's marks, and every
+# mark points into the very text PyYAML was handed: a node starts on a line of
+# the header, and a plain scalar ends on one. So a line number taken from a
+# mark indexes the header's lines directly, with nothing to bounds-check.
+
+
+@dataclass(frozen=True)
+class _Entry:
+    """One entry of a header's mapping: a name, its value, and its own lines.
+
+    ``span`` is every header line from the entry's key down to the next key's,
+    which keeps a block scalar's content with the option that opened it.
+    """
+
+    name: str
+    key: yaml.ScalarNode
+    value: yaml.Node
+    span: range
+
+    @property
+    def block_styled(self) -> bool:
+        """Whether the value is written as a block scalar."""
+        return (
+            isinstance(self.value, yaml.ScalarNode)
+            and self.value.style in _BLOCK_STYLES
+        )
+
+    @property
+    def children(self) -> tuple[_Entry, ...]:
+        """The entries of a mapping value; nothing else has any."""
+        if not isinstance(self.value, yaml.MappingNode):
+            return ()
+        return _entries(self.value, self.span.stop)
+
+
+def _entries(node: yaml.MappingNode, end: int) -> tuple[_Entry, ...]:
+    """The mapping's entries, over a header whose lines run out at ``end``.
+
+    Only a scalar key names an entry, so a key of any other shape leaves its
+    lines to the entry above it.
+    """
+    pairs = [
+        (key, value) for key, value in node.value if isinstance(key, yaml.ScalarNode)
+    ]
+    # One boundary per entry, plus the end: entry i owns up to boundary i + 1.
+    bounds = [key.start_mark.line for key, _ in pairs] + [end]
+    return tuple(
+        _Entry(key.value, key, value, range(bounds[index], bounds[index + 1]))
+        for index, (key, value) in enumerate(pairs)
+    )
+
+
+def _reject_repeated_names(entries: Collection[_Entry], prefix: str = '') -> None:
     """Refuse a name the header carries twice, since YAML keeps only the last.
 
     Raises:
         ProcessingError: If a name appears more than once at any level.
     """
     seen: set[tuple[str, str]] = set()
-    for key, value in entries:
-        if not isinstance(key, yaml.ScalarNode):
-            continue
+    for entry in entries:
         # The tag is part of the identity: quoted '12' and bare 12 are the
         # same characters but different names.
-        identity = (key.tag, key.value)
+        identity = (entry.key.tag, entry.name)
         if identity in seen:
             raise ProcessingError(
-                f"Duplicate option '{prefix}{key.value}' in cell option header",
+                f"Duplicate option '{prefix}{entry.name}' in cell option header",
             )
         seen.add(identity)
-        if isinstance(value, yaml.MappingNode):
-            _reject_repeated_names(value.value, f'{prefix}{key.value}.')
+        _reject_repeated_names(entry.children, f'{prefix}{entry.name}.')
 
 
 def _reject_commented_value(name: str, value: yaml.Node, lines: list[str]) -> None:
@@ -249,8 +296,6 @@ def _reject_commented_value(name: str, value: yaml.Node, lines: list[str]) -> No
         return
 
     end = value.end_mark
-    if end.line >= len(lines):
-        return
     if not lines[end.line][end.column :].lstrip().startswith('#'):
         return
 
@@ -264,8 +309,8 @@ def _reject_commented_value(name: str, value: yaml.Node, lines: list[str]) -> No
 
 
 def _reject_commented_values(
-    entries: Collection[tuple[yaml.ScalarNode, yaml.Node]],
-    text: str,
+    entries: Collection[_Entry],
+    lines: list[str],
     names: Collection[str],
 ) -> None:
     """Refuse an option whose value YAML cut short at a ``#``.
@@ -275,67 +320,24 @@ def _reject_commented_values(
     result plausible enough to ship unnoticed: the option keeps whatever came
     before the ``#``, or falls back to its default.
 
+    Only the entries directly under an option's name are checked: further down
+    is the shape of somebody's data, not a value a comment can quietly halve.
+
     Raises:
         ProcessingError: If an option's value is followed by a comment.
     """
-    lines = text.split('\n')
-
-    for key, value in entries:
-        if key.value not in names:
+    for entry in entries:
+        if entry.name not in names:
             continue
-        if isinstance(value, yaml.MappingNode):
-            for entry, entry_value in value.value:
-                if isinstance(entry, yaml.ScalarNode):
-                    _reject_commented_value(
-                        f'{key.value}.{entry.value}',
-                        entry_value,
-                        lines,
-                    )
+        if isinstance(entry.value, yaml.MappingNode):
+            for child in entry.children:
+                _reject_commented_value(
+                    f'{entry.name}.{child.name}',
+                    child.value,
+                    lines,
+                )
             continue
-        _reject_commented_value(key.value, value, lines)
-
-
-def _block_styled(node: yaml.MappingNode) -> frozenset[str]:
-    """The names of the options written as a block scalar."""
-    return frozenset(
-        key.value
-        for key, value in node.value
-        if isinstance(key, yaml.ScalarNode)
-        and isinstance(value, yaml.ScalarNode)
-        and value.style in _BLOCK_STYLES
-    )
-
-
-def _kept_header(
-    node: yaml.MappingNode,
-    split: _Split,
-    names: Collection[str],
-) -> str:
-    """The header's own source lines, minus those this tool's options occupy.
-
-    An option owns every line from its key to the next, which keeps a block
-    scalar's content with the option that opened it.
-    """
-    if not split.kept_lines:
-        return ''
-
-    total = len(split.kept_lines)
-    keys = [
-        (key.value, key.start_mark.line)
-        for key, _ in node.value
-        if isinstance(key, yaml.ScalarNode)
-    ]
-
-    dropped: set[int] = set()
-    for index, (name, start) in enumerate(keys):
-        if name not in names:
-            continue
-        end = keys[index + 1][1] if index + 1 < len(keys) else total
-        dropped.update(range(max(start, 0), min(end, total)))
-
-    return '\n'.join(
-        line for index, line in enumerate(split.kept_lines) if index not in dropped
-    )
+        _reject_commented_value(entry.name, entry.value, lines)
 
 
 def _claims_a_name(node: yaml.Node, lines: list[str], names: Collection[str]) -> bool:
@@ -345,20 +347,20 @@ def _claims_a_name(node: yaml.Node, lines: list[str], names: Collection[str]) ->
     toward over-claiming: a missed claim leaves the cell unscrubbed, which for
     ``scrub-omit`` means shipping the solution. A name counts wherever written
     -- key, list item, or the line a plain scalar opens on.
+
+    A node is a mapping, a sequence, or a scalar, so what reaches the last line
+    is a scalar.
     """
     if isinstance(node, yaml.MappingNode):
         return any(_claims_a_name(key, lines, names) for key, _ in node.value)
     if isinstance(node, yaml.SequenceNode):
         return any(_claims_a_name(item, lines, names) for item in node.value)
-    if not isinstance(node, yaml.ScalarNode):
-        return False
     return node.value in names or _opening_line(node, lines) in names
 
 
 def _opening_line(node: yaml.Node, lines: list[str]) -> str:
     """The header line on which ``node`` begins, stripped."""
-    index = node.start_mark.line
-    return lines[index].strip() if 0 <= index < len(lines) else ''
+    return lines[node.start_mark.line].strip()
 
 
 @contextlib.contextmanager
@@ -394,9 +396,9 @@ def _read(split: _Split, options: Collection[Option]) -> Header:
 
         # Untyped in PyYAML's stubs, as dispose is above.
         data = loader.construct_document(node)  # type: ignore[no-untyped-call]
+        lines = split.header.split('\n')
 
         if not isinstance(node, yaml.MappingNode):
-            lines = split.header.split('\n')
             if not _claims_a_name(node, lines, names):
                 return Header()
             # A bare option name is told about its missing colon; the second
@@ -413,23 +415,26 @@ def _read(split: _Split, options: Collection[Option]) -> Header:
                 f'entries, but got {type(data).__name__}',
             )
 
-        ours = [
-            (key, value)
-            for key, value in node.value
-            if isinstance(key, yaml.ScalarNode) and key.value in names
-        ]
+        ours = [entry for entry in _entries(node, len(lines)) if entry.name in names]
 
         _reject_repeated_names(ours)
         _reject_commented_values(
             ours,
-            split.header,
+            lines,
             frozenset(option.name for option in options if option.takes_text),
         )
 
+        # A code cell's kept lines stand one to one with the header's own, so
+        # an entry's span indexes both. A markdown cell keeps none of them.
+        dropped = {index for entry in ours for index in entry.span}
         return Header(
             data,
-            _block_styled(node),
-            kept=_kept_header(node, split, names),
+            frozenset(entry.name for entry in ours if entry.block_styled),
+            kept='\n'.join(
+                line
+                for index, line in enumerate(split.kept_lines)
+                if index not in dropped
+            ),
         )
 
 
@@ -462,6 +467,9 @@ def parse_cell_options(
 
     split = build(source)
     if not split.header.strip():
+        # An empty header is not YAML's to judge, and asking it anyway blames
+        # the author for whitespace: a lone '#|' carrying a tab would come back
+        # as an indentation to fix in a header that has no content at all.
         return Header(body=split.body)
 
     try:
