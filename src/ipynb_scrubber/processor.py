@@ -34,7 +34,7 @@ def process_notebook(
         ProcessingError: If an error occurs during processing
     """
     validated = validate_notebook(notebook)
-    scrubber = Scrubber.for_options(scrub_options)
+    scrubber = Scrubber(scrub_options)
 
     # note_id -> (index of the cell that claimed it, that cell's source)
     notes: dict[str, tuple[int, str]] = {}

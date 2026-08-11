@@ -1,7 +1,7 @@
 import pytest
 
 from ipynb_scrubber.actions import (
-    OPTIONS,
+    MARKERS,
     Clear,
     Keep,
     Note,
@@ -14,7 +14,7 @@ from ipynb_scrubber.notebook import get_cell_source
 from tests.builders import code, markdown, raw
 
 OPTS = ScrubbingOptions()
-SCRUBBER = Scrubber.for_options(OPTS)
+SCRUBBER = Scrubber(OPTS)
 
 
 def test_plain_cell_is_kept():
@@ -74,6 +74,17 @@ def test_omit_tag_beats_note_tag():
 def test_omit_tag_beats_clear_tag():
     """Dropping a cell subsumes rewriting it, so omit is considered first."""
     assert SCRUBBER.decide(code('x = 1', tags=['scrub-omit', 'scrub-clear'])) == Omit()
+
+
+def test_markers_are_considered_omit_then_note_then_clear():
+    """The registry's order is the precedence order, so it is load-bearing.
+
+    Omit first because dropping a cell subsumes every rewrite of it, and note
+    before clear because a note is a clear that also files away what it
+    removed. Reordering the table silently changes what a cell carrying two
+    markers becomes.
+    """
+    assert [option.key for option in MARKERS] == ['omit-tag', 'note-tag', 'clear-tag']
 
 
 def test_multiple_scrubber_options_in_one_header_error():
@@ -153,7 +164,7 @@ def test_note_as_tag_errors(builder):
 
 def test_note_as_tag_errors_under_its_configured_spelling():
     """The refusal names the tag the run reads, not the default one."""
-    scrubber = Scrubber.for_options(ScrubbingOptions(note_tag='keepme'))
+    scrubber = Scrubber(ScrubbingOptions(note_tag='keepme'))
     with pytest.raises(
         ProcessingError,
         match="Option 'keepme' is not supported as a cell tag",
@@ -288,7 +299,7 @@ def test_apply_note_with_empty_text_omits_the_newline():
 
 def test_apply_note_uses_the_configured_reference():
     """A kernel whose comment syntax is not '#' needs its own marker."""
-    scrubber = Scrubber.for_options(
+    scrubber = Scrubber(
         ScrubbingOptions(note_reference='// (See notes: {id})'),
     )
     cell = {'cell_type': 'code', 'source': 'x = 1'}
@@ -298,7 +309,7 @@ def test_apply_note_uses_the_configured_reference():
 
 def test_apply_note_reference_substitutes_only_the_id():
     """A literal brace is text, not a field: str.format would raise on it."""
-    scrubber = Scrubber.for_options(
+    scrubber = Scrubber(
         ScrubbingOptions(note_reference='# {see} (See notes: {id})'),
     )
     cell = {'cell_type': 'code', 'source': 'x = 1'}
@@ -342,7 +353,7 @@ def test_clear_defaults_to_the_text_the_run_configured_for_that_type(
     expected,
 ):
     """The default comes from the option naming that cell type, not a constant."""
-    scrubber = Scrubber.for_options(
+    scrubber = Scrubber(
         ScrubbingOptions(
             clear_text='write code',
             clear_text_markdown='write prose',
@@ -381,7 +392,7 @@ def test_apply_keeps_metadata_tags_that_are_not_this_tools():
 
 def test_apply_strips_the_scrubber_tag_under_its_configured_spelling():
     """The tag to remove is the one the run reads, not the default one."""
-    scrubber = Scrubber.for_options(ScrubbingOptions(clear_tag='solution'))
+    scrubber = Scrubber(ScrubbingOptions(clear_tag='solution'))
     target = code('x = 1', tags=['solution', 'scrub-clear'])
     result = scrubber.apply(target, Clear('replaced'))
     assert result['metadata']['tags'] == ['scrub-clear']
@@ -420,11 +431,7 @@ def test_apply_writes_a_kept_header_above_a_notes_reference():
 
 #: The options that mark cells, taken from the table rather than listed again:
 #: an option added there is exercised below without anyone remembering to.
-MARKERS = [
-    pytest.param(option, id=option.key)
-    for option in OPTIONS
-    if option.build is not None
-]
+MARKER_CASES = [pytest.param(option, id=option.key) for option in MARKERS]
 
 
 def answer_for(scrubber, cell):
@@ -446,7 +453,7 @@ def answer_for(scrubber, cell):
     return get_cell_source(scrubber.apply(cell, action))
 
 
-@pytest.mark.parametrize('option', MARKERS)
+@pytest.mark.parametrize('option', MARKER_CASES)
 def test_a_configured_header_option_scrubs_the_cell_it_marks(option):
     """Every marker in the table reaches the cell, under the run's own spelling.
 
@@ -456,7 +463,7 @@ def test_a_configured_header_option_scrubs_the_cell_it_marks(option):
     "this option's value is text"; the rest carry presence and reject a value.
     """
     name = f'renamed-{option.key}'
-    scrubber = Scrubber.for_options(ScrubbingOptions(**{option.field: name}))
+    scrubber = Scrubber(ScrubbingOptions(**{option.field: name}))
     value = ' replaced' if option.takes_text else ''
 
     answer = answer_for(scrubber, code(f'#| {name}:{value}\nSECRET = 1'))
@@ -464,7 +471,7 @@ def test_a_configured_header_option_scrubs_the_cell_it_marks(option):
     assert 'SECRET' not in answer
 
 
-@pytest.mark.parametrize('option', MARKERS)
+@pytest.mark.parametrize('option', MARKER_CASES)
 def test_a_configured_metadata_tag_is_never_silently_ignored(option):
     """The same markers, spelled as metadata tags rather than header options.
 
@@ -476,14 +483,14 @@ def test_a_configured_metadata_tag_is_never_silently_ignored(option):
     business of the tests above.
     """
     name = f'renamed-{option.key}'
-    scrubber = Scrubber.for_options(ScrubbingOptions(**{option.field: name}))
+    scrubber = Scrubber(ScrubbingOptions(**{option.field: name}))
 
     answer = answer_for(scrubber, code('SECRET = 1', tags=[name]))
 
     assert 'SECRET' not in answer
 
 
-@pytest.mark.parametrize('option', MARKERS)
+@pytest.mark.parametrize('option', MARKER_CASES)
 def test_a_default_spelling_is_inert_once_the_option_is_renamed(option):
     """Renaming an option moves it: the name it used to answer to is nobody's.
 
@@ -492,7 +499,7 @@ def test_a_default_spelling_is_inert_once_the_option_is_renamed(option):
     on it anyway would scrub a cell nothing in this run marked.
     """
     default = getattr(OPTS, option.field)
-    scrubber = Scrubber.for_options(
+    scrubber = Scrubber(
         ScrubbingOptions(**{option.field: f'renamed-{option.key}'}),
     )
     value = ' replaced' if option.takes_text else ''

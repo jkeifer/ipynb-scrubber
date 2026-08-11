@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import cached_property
 from typing import Any, Self, assert_never
 
 from .exceptions import ProcessingError, ScrubberError
@@ -87,13 +88,9 @@ class ScrubbingOptions:
             ScrubberError: On a wrong type, an unusable name, or duplicate tags.
         """
         for option in OPTIONS:
-            reject_wrong_type(option.key, getattr(self, option.field), option.type)
+            reject_wrong_type(option.key, getattr(self, option.field), str)
 
-        named = {
-            option.key: getattr(self, option.field)
-            for option in OPTIONS
-            if option.build is not None
-        }
+        named = {option.key: getattr(self, option.field) for option in MARKERS}
 
         for key, name in named.items():
             if not is_plain_name(name):
@@ -317,77 +314,81 @@ def _clear_action(value: Any, marked: _Marked) -> Clear:
 
 @dataclass(frozen=True)
 class ScrubberOption:
-    """One option this tool defines, declared whole.
+    """One option this tool defines: how it is spelled, and what holds it.
 
-    That is: how a config file and the CLI spell it, which
-    :class:`ScrubbingOptions` field holds a run's value for it, and -- for the
-    options that mark cells -- what a cell carrying it becomes. Carrying a
-    ``build`` is what makes an option a cell marker, so ``takes_text`` is read
-    for those and nowhere else.
+    That is, the TOML key and CLI flag a run configures it by, and which
+    :class:`ScrubbingOptions` field carries the value.
     """
 
     #: TOML key, and the CLI flag spelled ``--<key>``.
     key: str
     field: str
-    type: type
     help: str
+
+
+@dataclass(frozen=True)
+class MarkerOption(ScrubberOption):
+    """An option whose value is a name cells are marked with.
+
+    Its ``build`` says what a cell carrying that name becomes, and
+    ``takes_text`` whether the name may be written with replacement text after
+    it.
+    """
+
+    build: _Build
     takes_text: bool = False
-    build: _Build | None = None
 
 
-#: Every option this tool defines, in the order a cell's own options are
-#: considered in: omit first because dropping a cell subsumes every rewrite of
-#: it, and note before clear because a note is a clear that also files away what
-#: it removed. The options carrying no builder mark no cell, so that order never
-#: reaches them and they sit with the option whose replacement text they are.
+#: Every option this tool defines, whatever it does: this is what the CLI and a
+#: config file offer, so an option missing here cannot be configured at all.
 OPTIONS: tuple[ScrubberOption, ...] = (
-    ScrubberOption(
+    MarkerOption(
         'omit-tag',
         'omit_tag',
-        str,
         'Tag marking cells to omit entirely',
         build=_omit_action,
     ),
-    ScrubberOption(
+    MarkerOption(
         'note-tag',
         'note_tag',
-        str,
         'Option name marking cells to save to notes',
-        takes_text=True,
         build=_note_action,
+        takes_text=True,
     ),
     ScrubberOption(
         'note-reference',
         'note_reference',
-        str,
         'Marker pointing a noted cell at its note, with {id} for the note id',
     ),
-    ScrubberOption(
+    MarkerOption(
         'clear-tag',
         'clear_tag',
-        str,
         'Tag marking cells to clear',
-        takes_text=True,
         build=_clear_action,
+        takes_text=True,
     ),
     ScrubberOption(
         'clear-text',
         'clear_text',
-        str,
         'Text for cleared cells where unspecified',
     ),
     ScrubberOption(
         'clear-text-markdown',
         'clear_text_markdown',
-        str,
         'Text for cleared markdown cells where unspecified',
     ),
     ScrubberOption(
         'clear-text-raw',
         'clear_text_raw',
-        str,
         'Text for cleared raw cells where unspecified',
     ),
+)
+
+#: The options that mark cells, in the order a cell's own options are considered
+#: in: omit first because dropping a cell subsumes every rewrite of it, and note
+#: before clear because a note is a clear that also files away what it removed.
+MARKERS: tuple[MarkerOption, ...] = tuple(
+    option for option in OPTIONS if isinstance(option, MarkerOption)
 )
 
 
@@ -436,37 +437,39 @@ def _without_scrubber_tags(cell: Cell, names: frozenset[str]) -> Cell:
 
 
 @dataclass(frozen=True)
+class _Marker(Option):
+    """A marking option under one run's spelling, with what it builds."""
+
+    build: _Build
+
+
+@dataclass(frozen=True)
 class Scrubber:
     """One run's options, resolved once into everything reading a cell needs.
 
-    The spellings a run configures cannot change while it lasts, so the tuple of
-    parser options, the precedence order, and the tag names to strip are all
-    derived up front rather than rebuilt for every cell.
+    The spellings a run configures cannot change while it lasts, so the markers
+    and the tag names to strip are derived from ``opts`` once and cached, rather
+    than rebuilt for every cell.
     """
 
     opts: ScrubbingOptions
-    #: What :func:`parse_cell_options` is handed.
-    options: tuple[Option, ...]
-    #: Each cell-marking option under this run's spelling, with what that option
-    #: builds, in the precedence order :data:`OPTIONS` states.
-    markers: tuple[tuple[str, _Build], ...]
-    #: The names this tool takes back out of ``metadata.tags``.
-    names: frozenset[str]
 
-    @classmethod
-    def for_options(cls, opts: ScrubbingOptions) -> Self:
-        """The scrubber a run configured by ``opts`` reads its cells with."""
-        marking = tuple(
-            (getattr(opts, option.field), option.takes_text, option.build)
-            for option in OPTIONS
-            if option.build is not None
+    @cached_property
+    def markers(self) -> tuple[_Marker, ...]:
+        """Each marking option under this run's spelling.
+
+        In the precedence order :data:`MARKERS` states, and shaped as the header
+        parser wants its options, so this is also what it is handed.
+        """
+        return tuple(
+            _Marker(getattr(self.opts, option.field), option.takes_text, option.build)
+            for option in MARKERS
         )
-        return cls(
-            opts=opts,
-            options=tuple(Option(name, takes_text) for name, takes_text, _ in marking),
-            markers=tuple((name, build) for name, _, build in marking),
-            names=frozenset(name for name, _, _ in marking),
-        )
+
+    @cached_property
+    def names(self) -> frozenset[str]:
+        """The names this tool takes back out of ``metadata.tags``."""
+        return frozenset(marker.name for marker in self.markers)
 
     def decide(self, cell: Cell) -> CellAction:
         """Decide what happens to a cell.
@@ -480,16 +483,16 @@ class Scrubber:
         tags: list[str] = cell.get('metadata', {}).get('tags', [])
         cell_type = cell.get('cell_type', '')
         source = get_cell_source(cell)
-        header = parse_cell_options(cell_type, source, self.options)
+        header = parse_cell_options(cell_type, source, self.markers)
 
         _check_one_scrubber_option(header, self.names)
 
         cell_options: dict[str, Any] = {**dict.fromkeys(tags), **header.options}
         marked = _Marked(self.opts, cell_type, frozenset(tags), header)
 
-        for name, build in self.markers:
-            if name in cell_options:
-                return build(cell_options[name], marked)
+        for marker in self.markers:
+            if marker.name in cell_options:
+                return marker.build(cell_options[marker.name], marked)
 
         return Keep()
 
