@@ -5,12 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from ipynb_scrubber.config import (
-    FileEntry,
-    ProjectConfig,
-    ScrubbingOptions,
-    find_config,
-)
+from ipynb_scrubber.actions import OPTIONS, ScrubbingOptions
+from ipynb_scrubber.config import FileEntry, ProjectConfig, find_config
 from ipynb_scrubber.exceptions import ScrubberError
 
 
@@ -63,23 +59,6 @@ def test_config_resolves_options_per_file():
     assert [f.options.clear_text for f in config.files] == ['GLOBAL', 'MINE']
 
 
-def test_cli_defaults_match_dataclass_defaults():
-    import argparse
-
-    from ipynb_scrubber.cli import ScrubNotebook
-
-    parser = argparse.ArgumentParser()
-    ScrubNotebook().set_args(parser)
-    args = parser.parse_args([])
-    defaults = ScrubbingOptions()
-
-    assert args.clear_tag == defaults.clear_tag
-    assert args.clear_text == defaults.clear_text
-    assert args.clear_text_markdown == defaults.clear_text_markdown
-    assert args.omit_tag == defaults.omit_tag
-    assert args.note_tag == defaults.note_tag
-
-
 def test_every_registered_option_gets_a_cli_flag():
     """The registry is the single source of truth, including for the CLI."""
     import argparse
@@ -90,14 +69,9 @@ def test_every_registered_option_gets_a_cli_flag():
     ScrubNotebook().set_args(parser)
     args = parser.parse_args([])
 
-    for key, spec in ScrubbingOptions.KEYS.items():
-        assert getattr(args, spec.field) == getattr(ScrubbingOptions(), spec.field)
-        assert spec.help, f'{key} has no help text'
-
-
-def test_registry_field_names_are_real_dataclass_fields():
-    names = {f.name for f in dataclasses.fields(ScrubbingOptions)}
-    assert {spec.field for spec in ScrubbingOptions.KEYS.values()} <= names
+    for option in OPTIONS:
+        assert getattr(args, option.field) == getattr(ScrubbingOptions(), option.field)
+        assert option.help, f'{option.key} has no help text'
 
 
 def test_markdown_clear_text_is_a_separate_option():
@@ -124,7 +98,7 @@ def test_markdown_clear_text_is_overridable_per_file():
     assert entry.options.clear_text_markdown == '_mine_'
 
 
-@pytest.mark.parametrize('key', list(ScrubbingOptions.KEYS))
+@pytest.mark.parametrize('key', [option.key for option in OPTIONS])
 @pytest.mark.parametrize('value', [5, None, 1.5, True, ['x'], {'a': 1}])
 def test_option_values_of_the_wrong_type_are_rejected(key, value):
     """An untyped TOML value must not reach the dataclass unchecked."""
@@ -137,7 +111,7 @@ def test_wrong_type_error_names_the_type_and_the_value():
         ScrubbingOptions.from_dict({'clear-tag': 5})
 
 
-@pytest.mark.parametrize('key', list(ScrubbingOptions.KEYS))
+@pytest.mark.parametrize('key', [option.key for option in OPTIONS])
 def test_file_level_option_of_the_wrong_type_is_rejected(key):
     with pytest.raises(ScrubberError, match=f'{key} must be str'):
         FileEntry.from_dict(
@@ -310,7 +284,7 @@ def test_unknown_file_entry_key_errors():
 
 
 def test_field_name_spelling_is_not_a_valid_toml_key():
-    """KEYS maps TOML spellings only; the dataclass field name is a typo."""
+    """The table maps TOML spellings only; the dataclass field name is a typo."""
     with pytest.raises(ScrubberError, match='file entry key'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear_text': 'x'},

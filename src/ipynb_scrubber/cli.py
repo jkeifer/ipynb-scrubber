@@ -7,7 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, ClassVar, NoReturn, Protocol
 
-from .config import ProjectConfig, ScrubbingOptions
+from .actions import OPTIONS, ScrubbingOptions
+from .config import ProjectConfig
 from .exceptions import MissingNotesDestinationError, ScrubberError
 from .notes import require_destination
 from .processor import scrub
@@ -127,12 +128,12 @@ class ScrubNotebook:
     name = 'scrub-notebook'
 
     def set_args(self, parser: argparse.ArgumentParser) -> None:
-        for key, spec in ScrubbingOptions.KEYS.items():
+        for option in OPTIONS:
             parser.add_argument(
-                f'--{key}',
-                dest=spec.field,
-                default=getattr(_DEFAULTS, spec.field),
-                help=spec.help,
+                f'--{option.key}',
+                dest=option.field,
+                default=getattr(_DEFAULTS, option.field),
+                help=option.help,
             )
         parser.add_argument(
             '--notes-file',
@@ -146,10 +147,7 @@ class ScrubNotebook:
     def __call__(self, args: argparse.Namespace) -> int:
         try:
             options = ScrubbingOptions(
-                **{
-                    spec.field: getattr(args, spec.field)
-                    for spec in ScrubbingOptions.KEYS.values()
-                },
+                **{option.field: getattr(args, option.field) for option in OPTIONS},
             )
 
             try:
