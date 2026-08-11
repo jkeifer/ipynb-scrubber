@@ -634,6 +634,96 @@ def test_a_single_entry_writes_both_outputs(tmp_path: Path, sample_notebook, not
     assert sorted(p.name for p in out_dir.iterdir()) == ['notes.md', 'out.ipynb']
 
 
+def test_scrubbing_a_notebook_onto_itself_leaves_the_source_untouched(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """An entry whose output is its input must fail before anything is written.
+
+    This is the one failure this tool cannot be allowed to have: it exists to
+    derive an exercise copy and leave the original standing. An entry naming
+    one path twice — a copied line, an output never repointed — otherwise runs
+    to completion, reports the file as processed, and leaves the source
+    holding its own scrubbed copy with every solution gone. Outside version
+    control that is unrecoverable, so the bytes on disk are what this asserts.
+    """
+    notebook = tmp_path / 'lesson.ipynb'
+    write(notebook, sample_notebook)
+    before = notebook.read_bytes()
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{notebook}"
+output = "{notebook}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert notebook.read_bytes() == before
+    assert '✓' not in result.stderr
+
+
+def test_two_entries_writing_one_output_fail_before_anything_is_written(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """The batch commits both, so the loser would vanish without a word."""
+    first_input = tmp_path / 'first.ipynb'
+    last_input = tmp_path / 'last.ipynb'
+    write(first_input, sample_notebook)
+    write(last_input, sample_notebook)
+    out = tmp_path / 'out' / 'exercise.ipynb'
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{first_input}"
+output = "{out}"
+
+[[files]]
+input = "{last_input}"
+output = "{out}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert not out.exists()
+
+
+def test_an_entry_writing_over_another_entrys_input_leaves_it_untouched(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """One entry's output being another's source destroys that source."""
+    first_input = tmp_path / 'first.ipynb'
+    last_input = tmp_path / 'last.ipynb'
+    write(first_input, sample_notebook)
+    write(last_input, sample_notebook)
+    before = last_input.read_bytes()
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{first_input}"
+output = "{last_input}"
+
+[[files]]
+input = "{last_input}"
+output = "{tmp_path / 'out.ipynb'}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert last_input.read_bytes() == before
+
+
 def test_commit_failure_removes_staged_files(
     tmp_path: Path,
     sample_notebook,

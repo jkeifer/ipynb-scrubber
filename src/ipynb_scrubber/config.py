@@ -364,6 +364,58 @@ class FileEntry:
         'notes-file': str,
     }
 
+    def __post_init__(self) -> None:
+        """Reject an entry that would write over one of its own paths.
+
+        This tool derives an exercise copy, and the source it derives from has
+        to still be there afterwards. Nothing downstream is in a position to
+        notice otherwise: scrubbing reads the input, stages the output, and
+        renames it into place, so an entry naming one path twice is a run that
+        finishes, reports the file as processed, and leaves the source holding
+        its own scrubbed copy with every solution gone. Outside version
+        control there is nothing to recover it from.
+
+        Here rather than in ``from_dict`` because it is a fact about the paths
+        an entry holds, not about the mapping one was read from: a caller
+        building an entry by hand gets the same guarantee a config file does,
+        which is the point of checking it at all.
+
+        Paths are compared as written, without resolving them. That catches
+        the mistake people actually make — the same path twice, or an output
+        never repointed away from its input — and it catches it without
+        touching the filesystem, which is not something a constructor should
+        be doing. ``Path`` normalises a leading ``./`` on the way in, so
+        ``./a.ipynb`` and ``a.ipynb`` are already the same path here. Two
+        spellings that only meet once resolved — through ``..``, a symlink,
+        or two different relative paths — are not caught, and are a mistake
+        of a different and much rarer kind.
+
+        Raises:
+            ScrubberError: If any two of input, output and notes-file name the
+                same path.
+        """
+        if self.input == self.output:
+            raise ScrubberError(
+                f'input and output must name different files, but both are '
+                f'{self.input}. The scrubbed notebook is written to output, so '
+                'this would replace the source notebook with its own scrubbed '
+                'copy and destroy the solutions in it.',
+            )
+        if self.notes_file == self.input:
+            raise ScrubberError(
+                f'notes-file and input must name different files, but both are '
+                f'{self.input}. The notes are written to notes-file, so this '
+                'would replace the source notebook with a notes file and '
+                'destroy the solutions in it.',
+            )
+        if self.notes_file == self.output:
+            raise ScrubberError(
+                f'notes-file and output must name different files, but both '
+                f'are {self.output}. Both are written, so one would silently '
+                'overwrite the other and whichever landed last is all that '
+                'would be left.',
+            )
+
     @classmethod
     def from_dict(cls, data: dict[str, Any], defaults: ScrubbingOptions) -> Self:
         """Create FileEntry from a config mapping.
@@ -373,7 +425,8 @@ class FileEntry:
         Raises:
             ScrubberError: If input or output is missing, a key is
                 unrecognised, a value is not the declared type, notes-file is
-                empty, or the resolved tags are not all distinct.
+                empty, the resolved tags are not all distinct, or the entry's
+                paths are not all distinct.
         """
         reject_unknown_keys(
             data,
@@ -417,12 +470,63 @@ class ProjectConfig:
 
     TOP_LEVEL_KEYS: ClassVar[frozenset[str]] = frozenset({'options', 'files'})
 
+    def __post_init__(self) -> None:
+        """Reject entries that write over each other's paths.
+
+        An entry settles its own three paths, which is all it can see. Two
+        entries writing the same file, or one writing over another's input,
+        are the same destruction — a source notebook replaced by generated
+        output, or an output replaced by another entry's — and are only
+        visible with the whole batch in hand, which is what this class is.
+
+        The batch being all-or-nothing does not soften this. Every output is
+        staged before any is committed, so a collision is not an ordering
+        hazard that might be caught: both writes are prepared, both are
+        committed, the target ends up holding whichever landed last, and both
+        entries are reported as processed. Nothing about the run says the
+        first result was thrown away.
+
+        Paths are compared as written, for the reasons ``FileEntry`` gives.
+
+        Raises:
+            ScrubberError: If two entries write the same path, or an entry
+                writes over another entry's input.
+        """
+        # An entry colliding with itself never reaches here: FileEntry rejects
+        # that, so every path recorded below belongs to exactly one entry.
+        writers: dict[Path, str] = {}
+        for index, entry in enumerate(self.files):
+            writes = [('output', entry.output)]
+            if entry.notes_file is not None:
+                writes.append(('notes-file', entry.notes_file))
+            for key, path in writes:
+                origin = f'files[{index}].{key}'
+                if path in writers:
+                    raise ScrubberError(
+                        f'{writers[path]} and {origin} both write {path}. The '
+                        'batch commits both, so one would silently overwrite '
+                        'the other and whichever landed last is all that would '
+                        'be left.',
+                    )
+                writers[path] = origin
+
+        for index, entry in enumerate(self.files):
+            writer = writers.get(entry.input)
+            if writer is not None:
+                raise ScrubberError(
+                    f'{writer} writes {entry.input}, which is '
+                    f'files[{index}].input. That would replace a source '
+                    'notebook with generated output and destroy the solutions '
+                    'in it.',
+                )
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         """Create ProjectConfig from dictionary.
 
         Raises:
-            ScrubberError: If a key is unrecognised or no file entries exist.
+            ScrubberError: If a key is unrecognised, no file entries exist, an
+                entry is invalid, or two entries collide over a path.
         """
         reject_unknown_keys(data, cls.TOP_LEVEL_KEYS, 'config key')
 

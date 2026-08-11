@@ -216,6 +216,19 @@ not a path anything can be written to, and presence leaves nowhere for it to
 mean "no notes file", so `notes-file = ""` is an error rather than a silent
 omission. Leave the key out entirely to have no notes file.
 
+An entry's `input`, `output` and `notes-file` must all name different paths,
+and no two entries may collide either: two entries cannot write the same
+`output` or the same `notes-file`, and one entry cannot write to a path another
+entry reads as its `input`. Scrubbing derives an exercise copy and leaves the
+original alone, so in-place scrubbing is not supported — `output` equal to
+`input` would replace the source notebook with its own scrubbed copy and
+destroy the solutions in it. Any of these is a config error that fails the run
+before a single file is written.
+
+Paths are compared as written, so `./lesson.ipynb` and `lesson.ipynb` are the
+same path, but two spellings that only coincide once resolved — through `..`
+or a symlink — are not detected.
+
 Unknown keys anywhere in the config — the top level, `[options]`, or a
 `[[files]]` entry — are rejected, and the error names the invalid key and
 lists the valid ones, so a misspelled `clear-tagg` fails the run instead of
@@ -383,6 +396,14 @@ failure on the fourth notebook would leave the first three committed.
 Each `FileEntry` carries its own fully resolved `ScrubbingOptions`, with any
 per-entry overrides already merged over the global ones, so `entry.options`
 is what that notebook will actually be scrubbed with.
+
+A `FileEntry` built by hand is checked exactly as one read from a config file
+is: constructing one whose `input`, `output` and `notes_file` are not all
+distinct raises `ScrubberError` rather than overwriting the source notebook.
+The checks that need the whole batch — two entries writing one path, or an
+entry writing over another's input — belong to `ProjectConfig`, so a list of
+entries assembled by hand and passed straight to `scrub_files` does not get
+them.
 
 ### Errors
 
@@ -990,6 +1011,9 @@ print('Exercise: implement the functions below')
   above the replacement text. A markdown cell's header is replaced whole
 - **A notebook is scrubbed whole or not at all**: An error anywhere in a
   notebook means no output for it, rather than a partially scrubbed result
+- **A source notebook is never written to**: A config whose paths collide — an
+  entry scrubbing onto its own input, two entries writing one file, an entry
+  writing over another's input — is rejected before anything is read or written
 - **Outputs are written atomically**: Each file is written beside its target and
   moved into place once complete, so no output is ever seen half-written. A
   `scrub-project` run stages every file first and commits only once all of them
