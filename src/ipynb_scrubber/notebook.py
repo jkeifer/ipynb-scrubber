@@ -52,6 +52,15 @@ def evolve[M: Mapping[str, Any]](original: M, **changes: Any) -> M:
     return type(original)({**original, **changes})  # type: ignore[call-arg]
 
 
+def empty_like[M: Mapping[str, Any]](original: M) -> dict[str, Any]:
+    """An empty mapping in ``original``'s class, typed as a plain dict.
+
+    For a node this tool must supply rather than copy: it belongs to the
+    notebook, so it is built in the notebook's class like every other.
+    """
+    return cast('dict[str, Any]', type(original)())
+
+
 def get_notebook_language(notebook: Notebook) -> str | None:
     """The notebook's language, or None if it declares none.
 

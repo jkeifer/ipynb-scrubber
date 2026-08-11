@@ -3,7 +3,7 @@
 import json
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from .actions import Note, Omit, Scrubber, ScrubbingOptions
 from .exceptions import ProcessingError, ScrubberError
@@ -11,6 +11,7 @@ from .notebook import (
     Cell,
     Notebook,
     dumps_notebook,
+    empty_like,
     evolve,
     get_notebook_language,
     loads_notebook,
@@ -63,13 +64,8 @@ def process_notebook(
     # The default is validated's own class, not a dict literal, so a notebook
     # with no metadata key still comes back with metadata in its own class --
     # the invariant this module holds is total, with no exception for an
-    # absent key. type(validated) is type[Notebook], which the checker treats
-    # as the TypedDict constructor and so wants 'cells'; every class actually
-    # reaching here -- dict, NotebookNode and their kin -- takes no arguments.
-    metadata = validated.get(
-        'metadata',
-        cast('dict[str, Any]', type(validated)()),  # type: ignore[call-arg]
-    )
+    # absent key.
+    metadata = validated.get('metadata', empty_like(validated))
     # The changes target Notebook, a TypedDict, so they are typed as one and
     # unpacked -- rather than passed as keywords -- to get mypy's key and
     # value-type checking back; evolve's **changes: Any would otherwise wave
@@ -104,6 +100,20 @@ class NotebookScrubResult:
     #: How many cells were noted, so a caller with nowhere to put the notes can
     #: say how many it is refusing to throw away.
     note_count: int
+
+    def to_text(self) -> 'ScrubResult':
+        """This result with its notebook serialized the way Jupyter writes one.
+
+        The one road from the object form to the text form, so that a caller
+        that took the object form to keep a class alive can still end up with
+        exactly what :func:`scrub` returns -- and so that the aliasing the
+        notebook carries stops here rather than reaching a caller holding text.
+        """
+        return ScrubResult(
+            notebook_text=dumps_notebook(self.notebook),
+            notes_text=self.notes_text,
+            note_count=self.note_count,
+        )
 
 
 def scrub_parsed(
@@ -164,10 +174,4 @@ def scrub(data: bytes, options: ScrubbingOptions) -> ScrubResult:
         # Both bad input, and so worth a friendly error rather than a traceback.
         raise ScrubberError(f'Invalid notebook JSON: {e}') from e
 
-    result = scrub_parsed(notebook, options)
-
-    return ScrubResult(
-        notebook_text=dumps_notebook(result.notebook),
-        notes_text=result.notes_text,
-        note_count=result.note_count,
-    )
+    return scrub_parsed(notebook, options).to_text()
