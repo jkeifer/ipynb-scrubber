@@ -70,6 +70,54 @@ def process_notebook(
 
 
 @dataclass(frozen=True)
+class NotebookScrubResult:
+    """Everything scrubbing one in-memory notebook produces.
+
+    The notebook is an object rather than text because a caller holding one has
+    its serializer to hand already -- and it comes back in the class it went in
+    as, so a notebook parsed by jupytext can be written by jupytext.
+    """
+
+    #: The exercise notebook, in the class the input notebook arrived as.
+    notebook: Notebook
+    #: The rendered notes document, or None if no cell carried the note tag.
+    notes_text: str | None
+    #: How many cells were noted, so a caller with nowhere to put the notes can
+    #: say how many it is refusing to throw away.
+    note_count: int
+
+
+def scrub_parsed(
+    notebook: Any,
+    options: ScrubbingOptions,
+) -> NotebookScrubResult:
+    """Scrub one already-parsed notebook: process it, and render its notes.
+
+    The whole pipeline bar the parsing and the serializing, for a caller
+    holding a notebook object rather than bytes -- one read by jupytext or
+    nbformat, or built in memory. It comes back in the class it went in as, so
+    ``jupytext.reads()`` and ``jupytext.writes()`` sit either side of this
+    without a conversion between. Callers holding the bytes want :func:`scrub`,
+    which is this with a JSON reader and writer on either end.
+
+    Neither jupytext nor nbformat is a dependency of this package; both are
+    simply callers this works for.
+
+    Raises:
+        ScrubberError: On a bad notebook or an unhonorable option header.
+    """
+    processed, notes = process_notebook(notebook, options)
+
+    return NotebookScrubResult(
+        notebook=processed,
+        notes_text=(
+            render_notes(notes, get_notebook_language(processed)) if notes else None
+        ),
+        note_count=len(notes),
+    )
+
+
+@dataclass(frozen=True)
 class ScrubResult:
     """Everything scrubbing one notebook produces, as text ready to be written."""
 
@@ -97,12 +145,10 @@ def scrub(data: bytes, options: ScrubbingOptions) -> ScrubResult:
         # Both bad input, and so worth a friendly error rather than a traceback.
         raise ScrubberError(f'Invalid notebook JSON: {e}') from e
 
-    processed, notes = process_notebook(notebook, options)
+    result = scrub_parsed(notebook, options)
 
     return ScrubResult(
-        notebook_text=dumps_notebook(processed),
-        notes_text=(
-            render_notes(notes, get_notebook_language(processed)) if notes else None
-        ),
-        note_count=len(notes),
+        notebook_text=dumps_notebook(result.notebook),
+        notes_text=result.notes_text,
+        note_count=result.note_count,
     )
