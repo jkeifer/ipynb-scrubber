@@ -4,6 +4,8 @@ import sys
 
 import pytest
 
+from ipynb_scrubber import staging
+
 
 @pytest.fixture(scope='session')
 def scrubber():
@@ -35,3 +37,17 @@ def scrub_notebook(scrubber):
 @pytest.fixture
 def scrub_project(scrubber):
     return functools.partial(scrubber, 'scrub-project')
+
+
+@pytest.fixture
+def failing_commit(monkeypatch):
+    """Make moving a staged file onto its target fail.
+
+    Patches the rename itself rather than commit_all, so commit_all's cleanup
+    still runs -- that cleanup is what the tests using this are checking.
+    """
+
+    def boom(staged):
+        raise OSError('rename failed')
+
+    monkeypatch.setattr(staging, '_commit', boom)

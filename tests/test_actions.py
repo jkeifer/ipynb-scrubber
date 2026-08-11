@@ -11,7 +11,7 @@ from ipynb_scrubber.actions import (
 )
 from ipynb_scrubber.exceptions import ProcessingError, ScrubberError
 from ipynb_scrubber.notebook import get_cell_source
-from tests.builders import code, markdown
+from tests.builders import code, markdown, raw
 
 OPTS = ScrubbingOptions()
 SCRUBBER = Scrubber.for_options(OPTS)
@@ -71,6 +71,11 @@ def test_omit_tag_beats_note_tag():
     assert SCRUBBER.decide(code('x = 1', tags=['scrub-omit', 'scrub-note'])) == Omit()
 
 
+def test_omit_tag_beats_clear_tag():
+    """Dropping a cell subsumes rewriting it, so omit is considered first."""
+    assert SCRUBBER.decide(code('x = 1', tags=['scrub-omit', 'scrub-clear'])) == Omit()
+
+
 def test_multiple_scrubber_options_in_one_header_error():
     """No block is present, so the block-indentation hint would be nonsense.
 
@@ -110,15 +115,50 @@ def test_non_scrubber_sibling_options_are_allowed():
     )
 
 
+def test_sibling_options_are_kept_in_the_order_they_were_written():
+    """Kept lines come back in source order, from both sides of the option.
+
+    They are all written back above the replacement whatever their original
+    order, since a '#|' run only reads as options at the very top of a cell.
+    """
+    source = '#| echo: false\n#| scrub-clear: fill me in\n#| fig-cap: A plot\nX = 1'
+    assert SCRUBBER.decide(code(source)) == Clear(
+        'fill me in',
+        '#| echo: false\n#| fig-cap: A plot',
+    )
+
+
+def test_decide_reads_a_list_source_as_one_string():
+    """Jupyter's native on-disk format stores source as a list of lines.
+
+    The header spans several of them, and the body a note captures is what is
+    left once they are joined back together.
+    """
+    cell = code(['#| scrub-note: ex-1\n', 'line one\n', 'line two'])
+    assert SCRUBBER.decide(cell) == Note('ex-1', OPTS.clear_text, 'line one\nline two')
+
+
 def test_tag_omit_plus_source_note_is_allowed():
     """One source option, so the documented tag-level precedence still holds."""
     cell = code('#| scrub-note: ex-1\nx = 1', tags=['scrub-omit'])
     assert SCRUBBER.decide(cell) == Omit()
 
 
-def test_note_as_tag_errors():
+@pytest.mark.parametrize('builder', [code, markdown, raw])
+def test_note_as_tag_errors(builder):
+    """A tag carries no id, whatever kind of cell it is written on."""
     with pytest.raises(ProcessingError, match='not supported as a cell tag'):
-        SCRUBBER.decide(code('x = 1', tags=['scrub-note']))
+        SCRUBBER.decide(builder('x = 1', tags=['scrub-note']))
+
+
+def test_note_as_tag_errors_under_its_configured_spelling():
+    """The refusal names the tag the run reads, not the default one."""
+    scrubber = Scrubber.for_options(ScrubbingOptions(note_tag='keepme'))
+    with pytest.raises(
+        ProcessingError,
+        match="Option 'keepme' is not supported as a cell tag",
+    ):
+        scrubber.decide(code('x = 1', tags=['keepme']))
 
 
 def test_note_on_markdown_errors():
@@ -246,9 +286,38 @@ def test_apply_note_with_empty_text_omits_the_newline():
     assert result['source'] == '# (See notes: ex-1)'
 
 
+@pytest.mark.parametrize(
+    ('cell_type', 'expected'),
+    [
+        ('code', '# TODO: Implement this'),
+        ('markdown', '*TODO: Implement this*'),
+    ],
+)
+def test_default_clear_text_suits_the_cell_type(cell_type, expected):
+    """Each cell type reads its own markup, so each gets its own placeholder."""
+    assert SCRUBBER.default_clear_text(cell_type) == expected
+
+
+def test_default_clear_text_falls_back_to_the_code_text():
+    """A cell type nbformat adds later still gets text rather than nothing."""
+    assert SCRUBBER.default_clear_text('heading') == OPTS.clear_text
+
+
 def test_clear_via_tag_only():
     cell = code('x = 1', tags=['scrub-clear'])
     assert SCRUBBER.decide(cell) == Clear(OPTS.clear_text)
+
+
+@pytest.mark.parametrize('builder', [code, markdown, raw])
+def test_clear_defaults_to_the_text_written_for_the_cells_own_type(builder):
+    """A cleared cell's default text is picked by cell type, not by the code one.
+
+    Which text each type gets is test_default_clear_text_suits_the_cell_type's;
+    this asks only that the cell's type reach the choice at all.
+    """
+    cell = builder('secret', tags=['scrub-clear'])
+    expected = SCRUBBER.default_clear_text(cell['cell_type'])
+    assert SCRUBBER.decide(cell) == Clear(expected)
 
 
 def test_apply_strips_the_scrubber_tag_a_cell_was_marked_with():
