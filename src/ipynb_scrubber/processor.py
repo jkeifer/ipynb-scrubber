@@ -3,7 +3,7 @@
 import json
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from .actions import Note, Omit, Scrubber, ScrubbingOptions
 from .exceptions import ProcessingError, ScrubberError
@@ -60,7 +60,16 @@ def process_notebook(
         except ScrubberError as e:
             raise ProcessingError(f'Cell {index}: {e}') from e
 
-    metadata = validated.get('metadata', {})
+    # The default is validated's own class, not a dict literal, so a notebook
+    # with no metadata key still comes back with metadata in its own class --
+    # the invariant this module holds is total, with no exception for an
+    # absent key. type(validated) is type[Notebook], which the checker treats
+    # as the TypedDict constructor and so wants 'cells'; every class actually
+    # reaching here -- dict, NotebookNode and their kin -- takes no arguments.
+    metadata = validated.get(
+        'metadata',
+        cast('dict[str, Any]', type(validated)()),  # type: ignore[call-arg]
+    )
     # The changes target Notebook, a TypedDict, so they are typed as one and
     # unpacked -- rather than passed as keywords -- to get mypy's key and
     # value-type checking back; evolve's **changes: Any would otherwise wave
@@ -85,7 +94,10 @@ class NotebookScrubResult:
     as, so a notebook parsed by jupytext can be written by jupytext.
     """
 
-    #: The exercise notebook, in the class the input notebook arrived as.
+    #: The exercise notebook, in the class the input notebook arrived as. Every
+    #: copy in the pipeline is shallow, so a part this run left untouched --
+    #: a cell it did not rewrite, its metadata -- is the same object as in the
+    #: input notebook; mutating it here reaches back into that input too.
     notebook: Notebook
     #: The rendered notes document, or None if no cell carried the note tag.
     notes_text: str | None

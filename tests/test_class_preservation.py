@@ -7,17 +7,21 @@ places while still passing if a fourth site were added without it.
 
 A local dict subclass rather than nbformat's NotebookNode, because the promise
 is about any dict subclass. NotebookNode is one caller of it, and the round
-trip that motivates the promise belongs to test_jupytext.py.
+trip that motivates the promise belongs to test_jupytext.py. The one exception
+is test_nbformat_converts_on_assignment_but_not_construction below: it pins an
+upstream fact about NotebookNode itself -- not this package's promise -- that
+the per-node rebuild depends on, so nbformat is the only mapping that will do.
 """
 
 from typing import Any
 
+import nbformat
 import pytest
 
 from ipynb_scrubber.actions import ScrubbingOptions
 from ipynb_scrubber.notebook import evolve
 from ipynb_scrubber.processor import process_notebook
-from tests.builders import code, make_notebook
+from tests.builders import code, make_notebook, markdown, raw
 
 OPTS = ScrubbingOptions()
 
@@ -40,6 +44,8 @@ def test_the_notebook_its_cells_and_their_metadata_keep_their_class():
         make_notebook(
             code('answer = 42', tags=['scrub-clear']),
             code('untouched = 1'),
+            markdown('# Secret', tags=['scrub-clear']),
+            raw('secret raw', tags=['scrub-clear']),
         ),
     )
 
@@ -110,11 +116,22 @@ def test_nbformat_converts_on_assignment_but_not_construction():
     own evolve. Should this ever fail, that reasoning -- and the three call
     sites it justifies -- is what to revisit.
     """
-    from nbformat import NotebookNode
-
-    constructed = NotebookNode({'metadata': {'language_info': {}}})
+    constructed = nbformat.NotebookNode({'metadata': {'language_info': {}}})
     assert type(constructed['metadata']) is dict
 
-    assigned = NotebookNode()
+    assigned = nbformat.NotebookNode()
     assigned['metadata'] = {'language_info': {}}
-    assert type(assigned['metadata']) is NotebookNode
+    assert type(assigned['metadata']) is nbformat.NotebookNode
+
+
+def test_a_notebook_with_no_metadata_key_still_gets_metadata_in_its_class():
+    """The invariant is total: an absent key is not an exception to it.
+
+    ``validated.get('metadata', {})`` would default to a plain dict even for a
+    Node notebook; the default must be built in the notebook's own class.
+    """
+    nb = Node({'cells': [Node(code('untouched = 1'))]})
+
+    processed, _ = process_notebook(nb, OPTS)
+
+    assert type(processed['metadata']) is Node
