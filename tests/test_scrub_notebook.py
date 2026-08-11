@@ -1,7 +1,12 @@
+import argparse
+import errno
+import io
 import json
 import subprocess
 import sys
 
+from ipynb_scrubber.cli import ScrubNotebook
+from ipynb_scrubber.config import ScrubbingOptions
 from tests.builders import code, make_notebook, markdown
 
 
@@ -124,12 +129,56 @@ def test_failed_notebook_write_leaves_no_orphan_notes_file(tmp_path):
             stderr=subprocess.PIPE,
         )
 
-    # Not `== 1`: the notebook is still sitting in stdout's buffer when the
-    # interpreter shuts down, and CPython exits 120 when it cannot flush there.
-    assert result.returncode != 0
-    assert 'Error: Error writing output' in result.stderr
+    assert result.returncode == 1
+    assert result.stderr.strip() == (
+        'Error: Error writing output: [Errno 9] Bad file descriptor'
+    )
     # Neither the notes file nor the temporary it was staged as.
     assert [p.name for p in tmp_path.iterdir()] == ['sink']
+
+
+def test_failed_notebook_write_survives_a_stdout_without_a_descriptor(
+    tmp_path,
+    monkeypatch,
+):
+    """Discarding stdout's buffer must not itself become the failure reported.
+
+    A stdout that buffers in memory has no descriptor to redirect, which is how
+    stdout arrives under pytest's own capture. The write failure is still the
+    only thing the user should hear about.
+    """
+
+    class FailingBuffer:
+        def write(self, data):
+            raise OSError(errno.EPIPE, 'Broken pipe')
+
+        def flush(self):
+            pass
+
+    class NoDescriptor:
+        buffer = FailingBuffer()
+
+        def fileno(self):
+            raise io.UnsupportedOperation('fileno')
+
+    class Stdin:
+        pass
+
+    nb = make_notebook(code('#| scrub-note: ex-1\nsecret = 1'))
+    notes = tmp_path / 'notes.md'
+
+    stdin = Stdin()
+    stdin.buffer = io.BytesIO(json.dumps(nb).encode())
+    monkeypatch.setattr(sys, 'stdin', stdin)
+    monkeypatch.setattr(sys, 'stdout', NoDescriptor())
+
+    args = argparse.Namespace(notes_file=notes)
+    for spec in ScrubbingOptions.KEYS.values():
+        setattr(args, spec.field, getattr(ScrubbingOptions(), spec.field))
+
+    assert ScrubNotebook()(args) == 1
+    assert not notes.exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_no_command_exits_two(scrubber):

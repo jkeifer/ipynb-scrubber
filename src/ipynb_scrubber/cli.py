@@ -1,4 +1,6 @@
 import argparse
+import io
+import os
 import sys
 
 from collections.abc import Sequence
@@ -17,6 +19,37 @@ _DEFAULTS = ScrubbingOptions()
 
 def printe(*args: object, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)  # noqa: T201
+
+
+def _discard_unwritable_stdout() -> None:
+    """Throw away stdout's buffer by pointing its descriptor at the null device.
+
+    A failed write leaves the notebook sitting in stdout's ``BufferedWriter``,
+    and at shutdown CPython flushes ``sys.stdout`` regardless. That flush hits
+    the same descriptor that just failed, so the user gets an
+    ``Exception ignored while flushing sys.stdout`` traceback after the error we
+    already reported, and CPython replaces our exit status with 120. Redirecting
+    the descriptor is CPython's own remedy for this (see the note on SIGPIPE in
+    the :mod:`signal` docs): the buffered bytes go to the null device instead of
+    failing again, which is what we want anyway, since a notebook that could not
+    be delivered is not worth retrying a piece of.
+
+    Call this only where a write to stdout has failed, and only once the
+    contents of the buffer are known to be unwanted.
+    """
+    try:
+        fileno = sys.stdout.fileno()
+    except io.UnsupportedOperation:
+        # Nothing to redirect: stdout has been replaced by something buffering
+        # in memory rather than into a descriptor -- pytest's capture, say -- so
+        # the shutdown flush has no failing descriptor to reach.
+        return
+
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, fileno)
+    finally:
+        os.close(devnull)
 
 
 class Command(Protocol):
@@ -148,6 +181,7 @@ class ScrubNotebook:
                     sys.stdout.buffer.write(result.notebook_text.encode('utf-8'))
                     sys.stdout.buffer.flush()
                 except OSError as e:
+                    _discard_unwritable_stdout()
                     raise ScrubberError(f'Error writing output: {e}') from e
 
                 # Committed only now: notes are worth having only alongside the
