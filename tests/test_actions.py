@@ -306,39 +306,60 @@ def test_apply_note_reference_substitutes_only_the_id():
     assert result['source'] == '# {see} (See notes: ex-1)'
 
 
-@pytest.mark.parametrize(
-    ('cell_type', 'expected'),
-    [
-        ('code', '# TODO: Implement this'),
-        ('markdown', '*TODO: Implement this*'),
-        ('raw', 'TODO: Implement this'),
-    ],
-)
-def test_default_clear_text_suits_the_cell_type(cell_type, expected):
-    """Each cell type reads its own markup, so each gets its own placeholder."""
-    assert SCRUBBER.default_clear_text(cell_type) == expected
-
-
-def test_default_clear_text_falls_back_to_the_code_text():
-    """A cell type nbformat adds later still gets text rather than nothing."""
-    assert SCRUBBER.default_clear_text('heading') == OPTS.clear_text
-
-
 def test_clear_via_tag_only():
     cell = code('x = 1', tags=['scrub-clear'])
     assert SCRUBBER.decide(cell) == Clear(OPTS.clear_text)
 
 
-@pytest.mark.parametrize('builder', [code, markdown, raw])
-def test_clear_defaults_to_the_text_written_for_the_cells_own_type(builder):
-    """A cleared cell's default text is picked by cell type, not by the code one.
+@pytest.mark.parametrize(
+    ('builder', 'expected'),
+    [
+        (code, '# TODO: Implement this'),
+        (markdown, '*TODO: Implement this*'),
+        (raw, 'TODO: Implement this'),
+    ],
+)
+def test_clear_defaults_to_the_text_written_for_the_cells_own_type(builder, expected):
+    """Each cell type reads its own markup, so each gets its own placeholder.
 
-    Which text each type gets is test_default_clear_text_suits_the_cell_type's;
-    this asks only that the cell's type reach the choice at all.
+    The text is spelled out rather than looked up, since an expectation read
+    back out of the code under test agrees with it however wrong it is.
     """
     cell = builder('secret', tags=['scrub-clear'])
-    expected = SCRUBBER.default_clear_text(cell['cell_type'])
     assert SCRUBBER.decide(cell) == Clear(expected)
+
+
+@pytest.mark.parametrize(
+    ('builder', 'expected'),
+    [
+        (code, 'write code'),
+        (markdown, 'write prose'),
+        (raw, 'write text'),
+    ],
+)
+def test_clear_defaults_to_the_text_the_run_configured_for_that_type(
+    builder,
+    expected,
+):
+    """The default comes from the option naming that cell type, not a constant."""
+    scrubber = Scrubber.for_options(
+        ScrubbingOptions(
+            clear_text='write code',
+            clear_text_markdown='write prose',
+            clear_text_raw='write text',
+        ),
+    )
+    assert scrubber.decide(builder('secret', tags=['scrub-clear'])) == Clear(expected)
+
+
+def test_clear_falls_back_to_the_code_text_for_an_unknown_cell_type():
+    """A cell type nbformat adds later still gets text rather than nothing."""
+    cell = {
+        'cell_type': 'heading',
+        'source': 'secret',
+        'metadata': {'tags': ['scrub-clear']},
+    }
+    assert SCRUBBER.decide(cell) == Clear(OPTS.clear_text)
 
 
 def test_apply_strips_the_scrubber_tag_a_cell_was_marked_with():
