@@ -27,7 +27,11 @@ _STRING_TAG = 'tag:yaml.org,2002:str'
 
 #: One resolver for the whole module: it carries no per-document state, and a
 #: name is checked on every options instance a config override derives.
-_resolve = yaml.resolver.Resolver().resolve
+#: Annotated because PyYAML's stubs leave ``resolve`` untyped, which would make
+#: the tag it returns -- and so every comparison against it -- ``Any``.
+_resolve: Callable[[type[yaml.Node], str, tuple[bool, bool]], str] = (
+    yaml.resolver.Resolver().resolve
+)
 
 
 def is_plain_name(name: str) -> bool:
@@ -367,7 +371,8 @@ def _loader(text: str) -> Iterator[yaml.SafeLoader]:
     try:
         yield loader
     finally:
-        loader.dispose()
+        # PyYAML's stubs leave dispose untyped; the ignore goes when they don't.
+        loader.dispose()  # type: ignore[no-untyped-call]
 
 
 def _read(split: _Split, options: Collection[Option]) -> Header:
@@ -387,7 +392,8 @@ def _read(split: _Split, options: Collection[Option]) -> Header:
         if node is None:
             return Header()
 
-        data = loader.construct_document(node)
+        # Untyped in PyYAML's stubs, as dispose is above.
+        data = loader.construct_document(node)  # type: ignore[no-untyped-call]
 
         if not isinstance(node, yaml.MappingNode):
             lines = split.header.split('\n')
