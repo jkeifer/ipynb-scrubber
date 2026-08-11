@@ -43,20 +43,25 @@ def scrubbed():
 
 
 @pytest.mark.parametrize('fmt', ['py:percent', 'py:light', 'md', 'ipynb'])
-def test_jupytext_writes_what_it_parsed(scrubbed, fmt):
-    """No conversion between: the object goes straight back to jupytext."""
-    assert jupytext.writes(scrubbed.notebook, fmt=fmt)
+def test_jupytext_writes_a_scrubbed_notebook(scrubbed, fmt):
+    """No conversion between: the object goes straight back to jupytext.
 
-
-def test_the_exercise_notebook_is_scrubbed(scrubbed):
-    written = jupytext.writes(scrubbed.notebook, fmt='py:percent')
+    The assertions here are the ones every format shares. What a particular
+    format does with a cell's own header is below, once.
+    """
+    written = jupytext.writes(scrubbed.notebook, fmt=fmt)
 
     assert 'answer = 42' not in written
     assert 'instructor only' not in written
     assert '# TODO: Implement this' in written
-    assert '# (See notes: ex-1)' in written
-    # A shared header keeps the directives that are not this tool's.
+
+
+def test_the_percent_format_keeps_the_other_header_directives(scrubbed):
+    """A shared header keeps the directives that are not this tool's."""
+    written = jupytext.writes(scrubbed.notebook, fmt='py:percent')
+
     assert '#| echo: false' in written
+    assert '# (See notes: ex-1)' in written
     # An untagged cell is untouched, tag and all.
     assert 'untouched = 1' in written
     assert 'keepme' in written
