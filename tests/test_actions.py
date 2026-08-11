@@ -1,58 +1,65 @@
 import pytest
 
-from ipynb_scrubber import actions
-from ipynb_scrubber.actions import Clear, Keep, Note, Omit, apply, decide
-from ipynb_scrubber.config import ScrubbingOptions
-from ipynb_scrubber.exceptions import ProcessingError
-from ipynb_scrubber.options import Option
+from ipynb_scrubber.actions import (
+    OPTIONS,
+    Clear,
+    Keep,
+    Note,
+    Omit,
+    Scrubber,
+    ScrubbingOptions,
+)
+from ipynb_scrubber.exceptions import ProcessingError, ScrubberError
+from ipynb_scrubber.notebook import get_cell_source
 from tests.builders import code, markdown
 
 OPTS = ScrubbingOptions()
+SCRUBBER = Scrubber.for_options(OPTS)
 
 
 def test_plain_cell_is_kept():
-    assert decide(code('x = 1'), OPTS) == Keep()
+    assert SCRUBBER.decide(code('x = 1')) == Keep()
 
 
 def test_omit_via_source_option():
-    assert decide(code('#| scrub-omit:\nx = 1'), OPTS) == Omit()
+    assert SCRUBBER.decide(code('#| scrub-omit:\nx = 1')) == Omit()
 
 
 def test_omit_via_tag():
-    assert decide(code('x = 1', tags=['scrub-omit']), OPTS) == Omit()
+    assert SCRUBBER.decide(code('x = 1', tags=['scrub-omit'])) == Omit()
 
 
 def test_omit_with_a_value_errors():
     """Presence is the whole signal, so a value means the author meant something."""
     with pytest.raises(ProcessingError, match='takes no value'):
-        decide(code('#| scrub-omit: true\nx = 1'), OPTS)
+        SCRUBBER.decide(code('#| scrub-omit: true\nx = 1'))
 
 
 def test_clear_uses_configured_default_when_valueless():
-    assert decide(code('#| scrub-clear:\nx = 1'), OPTS) == Clear(OPTS.clear_text)
+    assert SCRUBBER.decide(code('#| scrub-clear:\nx = 1')) == Clear(OPTS.clear_text)
 
 
 def test_clear_uses_inline_text():
-    assert decide(code('#| scrub-clear: do it\nx = 1'), OPTS) == Clear('do it')
+    assert SCRUBBER.decide(code('#| scrub-clear: do it\nx = 1')) == Clear('do it')
 
 
 def test_clear_empty_string_is_not_the_default():
-    assert decide(code('#| scrub-clear: ""\nx = 1'), OPTS) == Clear('')
+    assert SCRUBBER.decide(code('#| scrub-clear: ""\nx = 1')) == Clear('')
 
 
 def test_clear_uses_a_block_scalar_for_multiple_lines():
     source = '#| scrub-clear: |\n#|   def add(a, b):\n#|       pass\nx = 1'
-    assert decide(code(source), OPTS) == Clear('def add(a, b):\n    pass')
+    assert SCRUBBER.decide(code(source)) == Clear('def add(a, b):\n    pass')
 
 
 def test_clear_rejects_a_value_that_is_not_text():
     """'no' is a YAML boolean, and clearing a cell to 'False' is never meant."""
     with pytest.raises(ProcessingError, match='takes replacement text'):
-        decide(code('#| scrub-clear: no\nx = 1'), OPTS)
+        SCRUBBER.decide(code('#| scrub-clear: no\nx = 1'))
 
 
 def test_note_defaults_to_clear_text():
-    assert decide(code('#| scrub-note: ex-1\nx = 1'), OPTS) == Note(
+    assert SCRUBBER.decide(code('#| scrub-note: ex-1\nx = 1')) == Note(
         'ex-1',
         OPTS.clear_text,
         'x = 1',
@@ -61,7 +68,7 @@ def test_note_defaults_to_clear_text():
 
 def test_omit_tag_beats_note_tag():
     """Both as metadata tags: omit wins, no error. Documented in the README."""
-    assert decide(code('x = 1', tags=['scrub-omit', 'scrub-note']), OPTS) == Omit()
+    assert SCRUBBER.decide(code('x = 1', tags=['scrub-omit', 'scrub-note'])) == Omit()
 
 
 def test_multiple_scrubber_options_in_one_header_error():
@@ -72,7 +79,7 @@ def test_multiple_scrubber_options_in_one_header_error():
     not be appended.
     """
     with pytest.raises(ProcessingError, match=r'only one .* option per cell') as exc:
-        decide(code('#| scrub-omit:\n#| scrub-note: ex-1\nx = 1'), OPTS)
+        SCRUBBER.decide(code('#| scrub-omit:\n#| scrub-note: ex-1\nx = 1'))
     assert 'indent it more deeply' not in str(exc.value)
 
 
@@ -84,7 +91,7 @@ def test_multiple_scrubber_options_catches_underindented_block_content():
     the indentation hint is relevant and must be appended.
     """
     with pytest.raises(ProcessingError, match=r'only one .* option per cell') as exc:
-        decide(code('#| scrub-clear: |\n#| scrub-omit:\nSECRET = 1'), OPTS)
+        SCRUBBER.decide(code('#| scrub-clear: |\n#| scrub-omit:\nSECRET = 1'))
     assert 'indent it more deeply' in str(exc.value)
 
 
@@ -95,7 +102,7 @@ def test_non_scrubber_sibling_options_are_allowed():
     so removing it along with the scrub-note that sat above it would silently
     change how the notebook renders.
     """
-    assert decide(code('#| scrub-note: ex-1\n#| echo: false\nx = 1'), OPTS) == Note(
+    assert SCRUBBER.decide(code('#| scrub-note: ex-1\n#| echo: false\nx = 1')) == Note(
         'ex-1',
         OPTS.clear_text,
         'x = 1',
@@ -105,19 +112,18 @@ def test_non_scrubber_sibling_options_are_allowed():
 
 def test_tag_omit_plus_source_note_is_allowed():
     """One source option, so the documented tag-level precedence still holds."""
-    assert (
-        decide(code('#| scrub-note: ex-1\nx = 1', tags=['scrub-omit']), OPTS) == Omit()
-    )
+    cell = code('#| scrub-note: ex-1\nx = 1', tags=['scrub-omit'])
+    assert SCRUBBER.decide(cell) == Omit()
 
 
 def test_note_as_tag_errors():
     with pytest.raises(ProcessingError, match='not supported as a cell tag'):
-        decide(code('x = 1', tags=['scrub-note']), OPTS)
+        SCRUBBER.decide(code('x = 1', tags=['scrub-note']))
 
 
 def test_note_on_markdown_errors():
     with pytest.raises(ProcessingError, match='only supported on code cells'):
-        decide(markdown('<!-- scrub-note: ex-1 -->'), OPTS)
+        SCRUBBER.decide(markdown('<!-- scrub-note: ex-1 -->'))
 
 
 @pytest.mark.parametrize(
@@ -132,7 +138,7 @@ def test_note_on_markdown_errors():
 )
 def test_note_without_id_errors(source):
     with pytest.raises(ProcessingError, match='requires an id'):
-        decide(code(f'{source}\nx = 1'), OPTS)
+        SCRUBBER.decide(code(f'{source}\nx = 1'))
 
 
 def test_note_mapping_supplies_replacement_text():
@@ -146,7 +152,7 @@ def test_note_mapping_supplies_replacement_text():
             'x = 1',
         ],
     )
-    assert decide(code(source), OPTS) == Note(
+    assert SCRUBBER.decide(code(source)) == Note(
         'ex-1',
         'def add(a, b):\n    pass',
         'x = 1',
@@ -155,19 +161,19 @@ def test_note_mapping_supplies_replacement_text():
 
 def test_note_mapping_without_text_uses_the_default():
     source = '#| scrub-note:\n#|   id: ex-1\nx = 1'
-    assert decide(code(source), OPTS) == Note('ex-1', OPTS.clear_text, 'x = 1')
+    assert SCRUBBER.decide(code(source)) == Note('ex-1', OPTS.clear_text, 'x = 1')
 
 
 def test_note_mapping_rejects_an_unknown_key():
     source = '#| scrub-note:\n#|   id: ex-1\n#|   txet: oops\nx = 1'
-    with pytest.raises(ProcessingError, match='Unknown scrub-note key'):
-        decide(code(source), OPTS)
+    with pytest.raises(ScrubberError, match='Unknown scrub-note key'):
+        SCRUBBER.decide(code(source))
 
 
 def test_note_mapping_rejects_text_that_is_not_a_string():
     source = '#| scrub-note:\n#|   id: ex-1\n#|   text: 3.5\nx = 1'
     with pytest.raises(ProcessingError, match='takes replacement text'):
-        decide(code(source), OPTS)
+        SCRUBBER.decide(code(source))
 
 
 def test_apply_empties_a_code_cells_outputs_and_execution_count():
@@ -178,7 +184,7 @@ def test_apply_empties_a_code_cells_outputs_and_execution_count():
         'outputs': [1],
         'execution_count': 3,
     }
-    result = apply(target, Keep())
+    result = SCRUBBER.apply(target, Keep())
     assert result['outputs'] == []
     assert result['execution_count'] is None
     assert result['source'] == 'x = 1'
@@ -193,7 +199,7 @@ def test_apply_removes_run_results_from_a_non_code_cell(cell_type):
         'outputs': [1],
         'execution_count': 3,
     }
-    result = apply(target, Keep())
+    result = SCRUBBER.apply(target, Keep())
     assert 'outputs' not in result
     assert 'execution_count' not in result
 
@@ -201,12 +207,12 @@ def test_apply_removes_run_results_from_a_non_code_cell(cell_type):
 def test_apply_keeps_a_list_source_a_list():
     """A rewritten cell keeps the source shape it arrived in, as Jupyter writes it."""
     target = {'cell_type': 'code', 'source': ['x = 1\n', 'y = 2'], 'metadata': {}}
-    assert apply(target, Clear('a\nb'))['source'] == ['a\n', 'b']
+    assert SCRUBBER.apply(target, Clear('a\nb'))['source'] == ['a\n', 'b']
 
 
 def test_apply_keeps_a_string_source_a_string():
     target = {'cell_type': 'code', 'source': 'x = 1', 'metadata': {}}
-    assert apply(target, Clear('a\nb'))['source'] == 'a\nb'
+    assert SCRUBBER.apply(target, Clear('a\nb'))['source'] == 'a\nb'
 
 
 def test_apply_leaves_the_input_cell_alone():
@@ -219,7 +225,7 @@ def test_apply_leaves_the_input_cell_alone():
     }
     original = dict(target)
 
-    result = apply(target, Clear('replaced'))
+    result = SCRUBBER.apply(target, Clear('replaced'))
 
     assert target == original
     assert result is not target
@@ -227,70 +233,158 @@ def test_apply_leaves_the_input_cell_alone():
 
 
 def test_apply_note_writes_reference_comment():
-    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', '# TODO', ''))
+    result = SCRUBBER.apply(
+        {'cell_type': 'code', 'source': 'x = 1'},
+        Note('ex-1', '# TODO', ''),
+    )
     assert result['source'] == '# (See notes: ex-1)\n# TODO'
 
 
 def test_apply_note_with_empty_text_omits_the_newline():
-    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Note('ex-1', '', ''))
+    cell = {'cell_type': 'code', 'source': 'x = 1'}
+    result = SCRUBBER.apply(cell, Note('ex-1', '', ''))
     assert result['source'] == '# (See notes: ex-1)'
 
 
 def test_clear_via_tag_only():
-    assert decide(code('x = 1', tags=['scrub-clear']), OPTS) == Clear(OPTS.clear_text)
+    cell = code('x = 1', tags=['scrub-clear'])
+    assert SCRUBBER.decide(cell) == Clear(OPTS.clear_text)
+
+
+def test_apply_strips_the_scrubber_tag_a_cell_was_marked_with():
+    """A tag is an instruction to this tool, so it goes out with the answer.
+
+    The source-header spelling is taken back out of the cell it marked; leaving
+    the metadata spelling behind would point at the cells holding the answers.
+    """
+    target = code('x = 1', tags=['scrub-clear'])
+    assert 'tags' not in SCRUBBER.apply(target, Clear('replaced')).get('metadata', {})
+
+
+def test_apply_keeps_metadata_tags_that_are_not_this_tools():
+    """The tag list is shared; only this tool's own tags are this tool's to take."""
+    target = code('x = 1', tags=['hide-input', 'scrub-clear'])
+    result = SCRUBBER.apply(target, Clear('replaced'))
+    assert result['metadata']['tags'] == ['hide-input']
+
+
+def test_apply_strips_the_scrubber_tag_under_its_configured_spelling():
+    """The tag to remove is the one the run reads, not the default one."""
+    scrubber = Scrubber.for_options(ScrubbingOptions(clear_tag='solution'))
+    target = code('x = 1', tags=['solution', 'scrub-clear'])
+    result = scrubber.apply(target, Clear('replaced'))
+    assert result['metadata']['tags'] == ['scrub-clear']
+
+
+def test_apply_leaves_the_input_cells_tags_alone():
+    """The copy is shallow, so the tag list has to be rebuilt rather than edited."""
+    target = code('x = 1', tags=['scrub-clear'])
+
+    SCRUBBER.apply(target, Clear('replaced'))
+
+    assert target['metadata']['tags'] == ['scrub-clear']
 
 
 def test_apply_clear_replaces_source():
-    result = apply({'cell_type': 'code', 'source': 'x = 1'}, Clear('replaced'))
+    result = SCRUBBER.apply({'cell_type': 'code', 'source': 'x = 1'}, Clear('replaced'))
     assert result['source'] == 'replaced'
 
 
-def registered_tags():
-    """The tags the option registry defines, derived here as it documents them."""
-    return {
-        key: Option(getattr(OPTS, spec.field), spec.takes_text)
-        for key, spec in ScrubbingOptions.KEYS.items()
-        if spec.takes_text is not None
-    }
-
-
-def test_the_header_parser_is_handed_every_registered_tag(monkeypatch):
-    """The parser is told which options are this tool's; nobody lists them twice.
-
-    An option the parser never hears about is one whose value a YAML comment
-    can eat unnoticed, and one no layer below would act on, so a fourth tag
-    added to the registry has to arrive here without anyone remembering it.
-    """
-    handed = []
-    parse = actions.parse_cell_options
-
-    def spy(cell_type, source, options):
-        handed.append(tuple(options))
-        return parse(cell_type, source, options)
-
-    monkeypatch.setattr(actions, 'parse_cell_options', spy)
-    decide(code('x = 1'), OPTS)
-
-    assert len(handed) == 1
-    assert set(handed[0]) == set(registered_tags().values())
-
-
-def test_the_precedence_order_names_every_registered_tag():
-    """The order states a sequence, not the set: the set is the registry's."""
-    assert sorted(key for key, _ in actions._PRECEDENCE_ORDER) == sorted(
-        registered_tags(),
+def test_apply_writes_a_kept_header_above_the_replacement():
+    """'#| echo: false' configures the cell that remains, so it remains too."""
+    result = SCRUBBER.apply(
+        {'cell_type': 'code', 'source': 'x = 1'},
+        Clear('fill me in', '#| echo: false'),
     )
+    assert result['source'] == '#| echo: false\nfill me in'
 
 
-def test_an_order_that_forgets_a_registered_tag_is_refused():
-    """Forgetting one would parse the option and then quietly ignore the cell."""
-    with pytest.raises(RuntimeError, match='precedence order'):
-        actions._precedence((('omit-tag', actions._omit_action),))
+def test_apply_writes_a_kept_header_above_a_notes_reference():
+    result = SCRUBBER.apply(
+        {'cell_type': 'code', 'source': 'x = 1'},
+        Note('ex-1', '# TODO', '', '#| echo: false'),
+    )
+    assert result['source'] == '#| echo: false\n# (See notes: ex-1)\n# TODO'
 
 
-def test_an_order_naming_an_option_that_is_not_a_tag_is_refused():
-    """'clear-text' says what a cleared cell holds; it never marks a cell."""
-    with pytest.raises(RuntimeError, match='precedence order'):
-        actions._precedence(
-            (*actions._PRECEDENCE_ORDER, ('clear-text', actions._omit_action)),
-        )
+#: The options that mark cells, taken from the table rather than listed again:
+#: an option added there is exercised below without anyone remembering to.
+MARKERS = [
+    pytest.param(option, id=option.key)
+    for option in OPTIONS
+    if option.build is not None
+]
+
+
+def answer_for(scrubber, cell):
+    """What a run has to say about ``cell``: the source it ships with, ``''``
+    if it is dropped, or the refusal raised in place of an action.
+
+    A refusal is an answer -- the run stops and nothing is written -- so the
+    three are one return type here. A cell that comes back carrying its own
+    source is the one case where nobody said anything about it.
+    """
+    try:
+        action = scrubber.decide(cell)
+    except ProcessingError as refusal:
+        return str(refusal)
+
+    if isinstance(action, Omit):
+        return ''
+
+    return get_cell_source(scrubber.apply(cell, action))
+
+
+@pytest.mark.parametrize('option', MARKERS)
+def test_a_configured_header_option_scrubs_the_cell_it_marks(option):
+    """Every marker in the table reaches the cell, under the run's own spelling.
+
+    The name configured here is nobody's default, so a layer that hardcoded a
+    default, or that never heard of this option at all, decides Keep and ships
+    SECRET in the exercise notebook. ``takes_text`` is the table's own word for
+    "this option's value is text"; the rest carry presence and reject a value.
+    """
+    name = f'renamed-{option.key}'
+    scrubber = Scrubber.for_options(ScrubbingOptions(**{option.field: name}))
+    value = ' replaced' if option.takes_text else ''
+
+    answer = answer_for(scrubber, code(f'#| {name}:{value}\nSECRET = 1'))
+
+    assert 'SECRET' not in answer
+
+
+@pytest.mark.parametrize('option', MARKERS)
+def test_a_configured_metadata_tag_is_never_silently_ignored(option):
+    """The same markers, spelled as metadata tags rather than header options.
+
+    A tag carries a name and nothing else, which is not enough for every
+    option: the note option needs an id, so as a tag it is refused outright
+    rather than acted on. Refusing is not ignoring, and this test asks only
+    that the tag be noticed -- what the refusal says is
+    test_note_as_tag_errors' business, and what a clear or an omit does is the
+    business of the tests above.
+    """
+    name = f'renamed-{option.key}'
+    scrubber = Scrubber.for_options(ScrubbingOptions(**{option.field: name}))
+
+    answer = answer_for(scrubber, code('SECRET = 1', tags=[name]))
+
+    assert 'SECRET' not in answer
+
+
+@pytest.mark.parametrize('option', MARKERS)
+def test_a_default_spelling_is_inert_once_the_option_is_renamed(option):
+    """Renaming an option moves it: the name it used to answer to is nobody's.
+
+    A run reads the spelling it was configured with and no other, so a header
+    or a tag left under the default name is somebody else's option now. Acting
+    on it anyway would scrub a cell nothing in this run marked.
+    """
+    default = getattr(OPTS, option.field)
+    scrubber = Scrubber.for_options(
+        ScrubbingOptions(**{option.field: f'renamed-{option.key}'}),
+    )
+    value = ' replaced' if option.takes_text else ''
+
+    assert 'SECRET' in answer_for(scrubber, code(f'#| {default}:{value}\nSECRET = 1'))
+    assert 'SECRET' in answer_for(scrubber, code('SECRET = 1', tags=[default]))

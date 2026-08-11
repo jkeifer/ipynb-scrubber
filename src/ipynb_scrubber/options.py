@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 
 from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field, replace
@@ -14,22 +15,39 @@ CODE_MARKER = '#|'
 MARKDOWN_MARKER = '<!--'
 MARKDOWN_SUFFIX = '-->'
 
-#: The scalar styles that open a block: content lives on the lines below the
-#: option, indented relative to it.
+#: The scalar styles that open a block: content lives on the lines below.
 _BLOCK_STYLES = frozenset({'|', '>'})
+
+#: What an option name may look like: nothing YAML would quote as a bare key.
+TAG_NAME = re.compile(r'[A-Za-z][A-Za-z0-9_-]*')
+
+#: What YAML tags a scalar it reads as text. Asked of YAML's own resolver, not
+#: a word list kept here, so the answer is the one PyYAML gives on a header.
+_STRING_TAG = 'tag:yaml.org,2002:str'
+
+#: One resolver for the whole module: it carries no per-document state, and a
+#: name is checked on every options instance a config override derives.
+_resolve = yaml.resolver.Resolver().resolve
+
+
+def is_plain_name(name: str) -> bool:
+    """Whether ``name`` is spelled the way an option header key must be."""
+    return TAG_NAME.fullmatch(name) is not None
+
+
+def reads_back_as_text(name: str) -> bool:
+    """Whether YAML reads ``name`` off an option header as this same text.
+
+    The alternative is YAML resolving it to a bool or None.
+    """
+    return _resolve(yaml.ScalarNode, name, (True, False)) == _STRING_TAG
 
 
 @dataclass(frozen=True)
 class Option:
     """An option this tool defines, as the header parser needs to know it.
 
-    ``name`` is a name ``ScrubbingOptions`` has already vetted, so a key that
-    spells it is a key YAML reads back as that same text.
-
-    ``takes_text`` says whether the option's value is text the author wrote.
-    That is the one thing the parser needs beyond the name: text can be eaten
-    by a YAML comment and the loss is worth refusing, while an option that
-    carries no value has nothing to lose and no advice about quoting to give.
+    ``takes_text`` marks the options whose value a YAML comment can eat.
     """
 
     name: str
@@ -40,18 +58,16 @@ class Option:
 class Header:
     """What a cell's option header carries.
 
-    ``options`` is the mapping the header holds, with values resolved by YAML.
-    ``block_styled`` names the options written as a block scalar, which tells a
-    caller whether advice about block indentation is relevant. ``body`` is the
-    cell's source below the header, which is the cell's actual content: the
-    header is instructions about the cell, not part of it.
+    That is the mapping it holds with values resolved by YAML, and the source
+    below it, i.e. the cell's real content.
     """
 
     options: dict[str, Any] = field(default_factory=dict)
+    #: The options written as a block scalar.
     block_styled: frozenset[str] = frozenset()
     body: str = ''
-    #: The header's source lines that belong to somebody else's options, which
-    #: are part of the cell and belong in the output above whatever replaces it.
+    #: Header source lines belonging to somebody else's options, which are part
+    #: of the cell and go above whatever replaces it.
     kept: str = ''
 
 
@@ -64,22 +80,18 @@ class _Split:
     #: The source below the header, verbatim.
     body: str
     #: The original source line behind each line of ``header``. Empty for a
-    #: header that cannot be kept a line at a time, so it is replaced whole.
+    #: header that is replaced whole rather than a line at a time.
     kept_lines: tuple[str, ...] = ()
 
 
 def _code_header(source: str) -> _Split:
     """Split a code cell's source at the end of its leading ``#|`` run.
 
-    Each marker is stripped along with at most one following space, so that
-    content indented relative to the marker keeps that indentation. A blank
-    line participates in the header when another ``#|`` line follows it, which
-    is what lets a block scalar contain one. A blank line with no ``#|`` after
-    it belongs to the body.
+    Markers lose at most one following space; a blank line joins only if ``#|``
+    follows.
     """
     lines = source.split('\n')
-    # Each header line paired with the source line it was taken from, so the
-    # two cannot fall out of step.
+    # Each header line paired with the source line it came from.
     header: list[tuple[str, str]] = []
     pending: list[tuple[str, str]] = []
     end = 0
@@ -106,14 +118,8 @@ def _code_header(source: str) -> _Split:
 def _markdown_header(source: str) -> _Split:
     """Split a markdown cell's source at the end of its leading HTML comments.
 
-    A comment is either self-closing (``<!-- scrub-omit: -->``) or spans to a
-    line containing only ``-->``. The inner text of each is concatenated into
-    one document.
-
-    No kept lines are reported, so the header is replaced whole rather than a
-    line at a time. A comment's delimiters are not options and do not survive
-    their contents being removed, and nothing but this tool writes options in a
-    markdown cell's comments, so there is nothing there worth keeping.
+    No kept lines are reported, so the header is replaced whole: the delimiters
+    do not survive their contents being removed.
 
     Raises:
         ProcessingError: If a comment is never closed.
@@ -168,23 +174,16 @@ _HEADERS: dict[str, Callable[[str], _Split]] = {
 }
 
 
-#: What YAML says when a plain value carries a second ``:``. That is much the
-#: likeliest way a header stops being YAML — a caption reading ``Figure 1: a
-#: plot`` is the natural thing to write — and the parser's own words point at
-#: the mechanism rather than the fix. Quarto, which reads the same header with
-#: the same rules, gives the same advice: quote a value containing ``:``.
+#: What YAML says when a plain value carries a second ``:``, much the likeliest
+#: way a header stops being YAML (a caption reading ``Figure 1: a plot``).
 _UNQUOTED_COLON = 'mapping values are not allowed here'
 
 
 def _describe(error: yaml.YAMLError, text: str) -> str:
     """Turn a YAML parse failure into advice aimed at the header's author.
 
-    Advice needs the line the failure sits on and what YAML was unhappy about,
-    and only a ``MarkedYAMLError`` carries either. A failure YAML cannot place
-    at all — text it refused to read in the first place, say — arrives as a
-    plain ``YAMLError``, and there its own words are all there is to pass on. A
-    marked error may still carry neither mark nor problem, so each is checked
-    before it is leaned on.
+    Only a ``MarkedYAMLError`` carries a line or a problem, and may carry
+    neither.
     """
     if isinstance(error, yaml.MarkedYAMLError):
         mark = error.problem_mark
@@ -215,15 +214,7 @@ def _reject_repeated_names(
     entries: Collection[tuple[yaml.Node, yaml.Node]],
     prefix: str = '',
 ) -> None:
-    """Refuse a name that the header carries more than once.
-
-    YAML resolves a repeated name by keeping the last one. In an option header
-    that silently discards an instruction the author wrote, so a repeat is
-    reported instead. ``entries`` are the header's entries this tool owns; an
-    option written as a mapping is descended into whole, because everything
-    under such a name belongs to the option too and a repeat there is lost the
-    same way. Whether a neighbour may repeat its own name is not this tool's
-    call, so nothing else is looked at.
+    """Refuse a name the header carries twice, since YAML keeps only the last.
 
     Raises:
         ProcessingError: If a name appears more than once at any level.
@@ -245,11 +236,7 @@ def _reject_repeated_names(
 
 
 def _reject_commented_value(name: str, value: yaml.Node, lines: list[str]) -> None:
-    """Refuse a value that YAML cut short at a ``#``.
-
-    Only a plain, unquoted scalar can lose text this way. A quoted value keeps
-    its ``#`` and a block scalar is verbatim, so a comment beside either is
-    deliberate.
+    """Refuse a plain scalar that YAML cut short at a ``#``.
 
     Raises:
         ProcessingError: If the value is followed by a comment.
@@ -279,18 +266,10 @@ def _reject_commented_values(
 ) -> None:
     """Refuse an option whose value YAML cut short at a ``#``.
 
-    In YAML a ``#`` outside quotes opens a comment, and the rest of the line
-    goes with it. Replacement text is full of Python comments, so the loss is
-    likely and the result is plausible enough to ship unnoticed: the option
-    keeps whatever came before the ``#``, or falls back to its default when
-    nothing did.
-
-    ``entries`` are the header's entries this tool owns, and ``names`` narrows
-    those to the options that take text: an option carrying no value has
-    nothing for a comment to eat, and telling its author to quote a value they
-    never wrote is advice that leads nowhere. The entries of an option written
-    as a mapping are checked too, because everything under such a name belongs
-    to the option.
+    An unquoted ``#`` opens a comment and the rest of the line goes with it.
+    Replacement text is full of Python comments, so the loss is likely and the
+    result plausible enough to ship unnoticed: the option keeps whatever came
+    before the ``#``, or falls back to its default.
 
     Raises:
         ProcessingError: If an option's value is followed by a comment.
@@ -328,15 +307,10 @@ def _kept_header(
     split: _Split,
     names: Collection[str],
 ) -> str:
-    """The header's own source lines, minus those the tool's options occupy.
+    """The header's own source lines, minus those this tool's options occupy.
 
-    The header is shared, so the lines carrying somebody else's options are
-    part of the cell and ride into the output with it. Only the lines this
-    tool's own options sit on are its to remove.
-
-    An option owns every line from its key down to the next key, which is what
-    puts a block scalar's content with the option that opened it. A header with
-    no kept lines is replaced whole.
+    An option owns every line from its key to the next, which keeps a block
+    scalar's content with the option that opened it.
     """
     if not split.kept_lines:
         return ''
@@ -363,14 +337,10 @@ def _kept_header(
 def _claims_a_name(node: yaml.Node, lines: list[str], names: Collection[str]) -> bool:
     """Whether a header holding no mapping still writes one of ``names``.
 
-    A header that holds a mapping never asks this: its keys say plainly which
-    of its entries are this tool's, and ownership is read off those. What is
-    left is a header the author already got wrong, where nothing sits where an
-    option would go, and there the reading leans the other way: a missed claim
-    leaves the cell unscrubbed, which for ``scrub-omit`` means shipping the
-    solution. So a name counts wherever it is written — as a key, as an item of
-    a list, or on the line a plain scalar opens on, since such a scalar
-    swallows the lines below it and resolves to a value that names nothing.
+    Only asked of a header the author already got wrong, so the reading leans
+    toward over-claiming: a missed claim leaves the cell unscrubbed, which for
+    ``scrub-omit`` means shipping the solution. A name counts wherever written
+    -- key, list item, or the line a plain scalar opens on.
     """
     if isinstance(node, yaml.MappingNode):
         return any(_claims_a_name(key, lines, names) for key, _ in node.value)
@@ -382,13 +352,7 @@ def _claims_a_name(node: yaml.Node, lines: list[str], names: Collection[str]) ->
 
 
 def _opening_line(node: yaml.Node, lines: list[str]) -> str:
-    """The header line on which ``node`` begins, stripped.
-
-    A plain scalar swallows the lines below it, so the value YAML resolves it
-    to names nothing even when the author wrote an option name on a line of its
-    own: ``scrub-omit`` above a note to self folds into one string. The line the
-    scalar starts on still holds what they wrote.
-    """
+    """The header line on which ``node`` begins, stripped."""
     index = node.start_mark.line
     return lines[index].strip() if 0 <= index < len(lines) else ''
 
@@ -397,9 +361,7 @@ def _opening_line(node: yaml.Node, lines: list[str]) -> str:
 def _loader(text: str) -> Iterator[yaml.SafeLoader]:
     """A YAML loader for ``text``, disposed of once the caller is done.
 
-    Constructing the loader is itself part of reading the text: the reader
-    scans the whole string for characters YAML cannot carry as it is built, so
-    a malformed header can fail here rather than at the first parsing step.
+    Construction is part of reading, so a malformed header can fail here.
     """
     loader = yaml.SafeLoader(text)
     try:
@@ -411,27 +373,12 @@ def _loader(text: str) -> Iterator[yaml.SafeLoader]:
 def _read(split: _Split, options: Collection[Option]) -> Header:
     """The Header the split's header text describes, from a single parse.
 
-    One loader yields both the node graph and the values, so there is one
-    source of truth for what the header says. The graph carries the writing
-    that resolved values drop: which scalars are block scalars, where each
-    value stopped, and which names were written as keys.
-
-    The values are built before anything is decided about the header, because
-    YAML gives up on some documents only once it starts turning parsed text
-    into values. That is a malformed header rather than a question about
-    ownership, so the failure is left to pass through.
-
-    Ownership is then settled once, ahead of every check: the entries whose
-    keys are this tool's names are picked off the mapping, and each check below
-    reads those alone, so each complaint it makes is honestly about an option
-    this tool defines. A header holding no mapping has no keys to read
-    ownership off, and is judged whole.
+    One loader yields both the node graph and the values, the graph carrying
+    what resolved values drop: block styles, and where each value stopped.
 
     Raises:
-        yaml.YAMLError: If the header is not well-formed YAML, whether that
-            surfaces while parsing it or while building its values.
-        ProcessingError: If it is well-formed but names one of this tool's
-            options wrongly.
+        yaml.YAMLError: If the header is not well-formed YAML.
+        ProcessingError: If it names one of this tool's options wrongly.
     """
     names = {option.name for option in options}
 
@@ -446,13 +393,8 @@ def _read(split: _Split, options: Collection[Option]) -> Header:
             lines = split.header.split('\n')
             if not _claims_a_name(node, lines, names):
                 return Header()
-            # A header opening on a bare option name is told about the colon
-            # rather than about the mapping: the header is YAML and an option
-            # is a mapping entry, so the colon is what makes a name an option
-            # at all, and without it the name is a plain string that also
-            # swallows any header lines below it. That is the more useful thing
-            # to say, so what is left for the second message is a shape no
-            # option can be read out of at all.
+            # A bare option name is told about its missing colon; the second
+            # message is for shapes no option can be read out of at all.
             opener = _opening_line(node, lines)
             if opener in names:
                 raise ProcessingError(
@@ -492,38 +434,20 @@ def parse_cell_options(
 ) -> Header:
     """Parse the option header at the top of a cell's source.
 
-    Code cells carry the header as a leading run of Quarto ``#|`` lines;
-    markdown cells carry it as leading HTML comments. Either way the text is
-    one YAML document, and the mapping it holds is returned with its values
-    resolved by YAML: ``scrub-omit:`` yields ``None``, ``scrub-clear: hello``
-    yields ``'hello'``, and a block scalar yields its lines. Cell types with no
-    comment syntax to hide a header in always yield an empty header.
+    Code cells carry it as leading Quarto ``#|`` lines, markdown cells as
+    leading HTML comments; either way the text is one YAML document, and other
+    cell types yield an empty header.
 
-    ``options`` are the options this tool defines. The header is shared with
-    whatever else writes in the same comments, so ownership is settled once,
-    off the parsed keys, and every complaint made here is about an entry whose
-    key is one of ``options``. A neighbour's repeated key, non-text key, or
-    commented-out value is theirs to make sense of, and is left alone even in a
-    header this tool does read an option out of. Reading ownership off the keys
-    rather than the raw text is what keeps a name inside a longer key, or in
-    somebody else's value, from handing this tool a header it does not own.
-
-    A header holding no mapping has no keys to read ownership off, so there a
-    name written anywhere in it counts: a ``#|-----`` divider names none and
-    yields no options, while a colonless ``scrub-omit`` is reported rather than
-    passed over, since passing it over ships the cell it was meant to remove.
-
-    A header that is not well-formed YAML is reported whether or not it names
-    an option, and whether YAML gives up on parsing the text or on building the
-    values it parsed. Nothing can say whose such a header is, and the same
-    block is YAML to Quarto, so text that malformed is broken for its author
-    either way.
+    The header is shared, so ownership is settled off the parsed keys rather
+    than the raw text -- that is what keeps a name inside a longer key, or in
+    somebody else's value, from handing this tool a header it does not own. A
+    non-mapping header has no keys to read ownership off, so there a name
+    written anywhere counts: a colonless ``scrub-omit`` is reported rather than
+    passed over, since passing it over ships the cell it meant to remove.
 
     Raises:
-        ProcessingError: If the header is not well-formed YAML, if one holding
-            no mapping still names an option, or if an option this tool defines
-            is repeated or, where it takes text, has its value eaten by a YAML
-            comment.
+        ProcessingError: On malformed YAML, on a non-mapping header naming an
+            option, or on an option repeated or eaten by a YAML comment.
     """
     build = _HEADERS.get(cell_type)
     if build is None:
@@ -537,15 +461,10 @@ def parse_cell_options(
     try:
         header = _read(split, options)
     except yaml.YAMLError as e:
-        # YAML could not read the header through, so there is no graph to say
-        # whose it is. Guessing from the raw text claims headers that merely
-        # look like ours, and staying quiet leaves a cell this tool was told to
-        # scrub in the output. Neither is worth it: the header is YAML, Quarto
-        # reads the same block as YAML, and text this malformed is broken for
-        # whoever else writes here too. Report it.
+        # No graph, so no way to say whose header it is. Guessing from raw text
+        # claims headers that merely look like ours; staying quiet ships a cell
+        # this tool was told to scrub. Report it.
         raise ProcessingError(_describe(e, split.header)) from e
 
-    # Where the body starts is a property of the source, not of what the header
-    # turned out to say, so it is attached here rather than threaded through
-    # every path that decides what the header means.
+    # Where the body starts is a property of the source, not of the header.
     return replace(header, body=split.body)

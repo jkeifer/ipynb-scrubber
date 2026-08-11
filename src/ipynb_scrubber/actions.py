@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
-from dataclasses import dataclass
-from typing import Any, assert_never
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from typing import Any, Self, assert_never
 
-from .config import ScrubbingOptions, TagSpec, reject_unknown_keys
 from .exceptions import ProcessingError, ScrubberError
 from .notebook import Cell, get_cell_source, to_cell_source
-from .options import Header, Option, parse_cell_options
+from .options import (
+    Header,
+    Option,
+    is_plain_name,
+    parse_cell_options,
+    reads_back_as_text,
+)
+from .validation import reject_unknown_keys, reject_wrong_type
 
 
 @dataclass(frozen=True)
@@ -32,10 +38,9 @@ class Clear:
 class Note:
     """Save ``body`` under ``note_id`` and replace the cell's source with ``text``.
 
-    ``body`` is the cell's content with its option header removed. The header
-    is an instruction to this tool, and one carrying ``text`` holds the very
-    scaffolding the student is meant to fill in, so keeping it would file the
-    exercise prompt alongside the answer it is a prompt for.
+    ``body`` drops the cell's own option header: one carrying ``text`` holds the
+    scaffolding the student must fill in, so filing it alongside the answer
+    would give the exercise away.
     """
 
     note_id: str
@@ -45,47 +50,116 @@ class Note:
 
 
 #: What can happen to a cell that survives into the output. ``apply`` accepts
-#: exactly these, so "an omitted cell is never rewritten" is a type, not a
-#: comment.
+#: exactly these, so "an omitted cell is never rewritten" is a type.
 CellRewrite = Keep | Clear | Note
 
 CellAction = Omit | CellRewrite
 
 
 @dataclass(frozen=True)
-class _Marked:
-    """A cell an option was found on, as the builders below need to see it.
+class ScrubbingOptions:
+    """Scrubbing options.
 
-    Every builder answers the same question — what does this option, on this
-    cell, mean? — and each needs a different part of what surrounds the option
-    to answer it: how it was written, what kind of cell carries it, and what
-    that cell holds once its option header is taken off. Handing all of it over
-    as one value is what lets the builders share a signature, and so what lets
-    the precedence order below be data rather than a run of near-identical
-    branches. A builder reading only part of this is reading the part its own
-    option turns on, not ignoring parameters it was made to accept.
+    Frozen because every rule lives in ``__post_init__`` and nothing re-checks
+    a field afterwards; derive copies with ``merged_with`` or
+    ``dataclasses.replace``, which re-run those rules.
     """
 
-    opts: ScrubbingOptions
+    clear_tag: str = 'scrub-clear'
+    clear_text: str = '# TODO: Implement this'
+    clear_text_markdown: str = '*TODO: Implement this*'
+    omit_tag: str = 'scrub-omit'
+    note_tag: str = 'scrub-note'
+
+    def __post_init__(self) -> None:
+        """Reject values of the wrong type, and tag names unusable or colliding.
+
+        A tag must round-trip through YAML as the same plain text, which the
+        pattern alone does not ensure: ``yes``/``no`` resolve to booleans and
+        ``null`` to nothing. Such a tag arrives off a header as a bool or None,
+        no lookup by name finds it, and the cell ships unscrubbed -- for
+        ``omit-tag``, with the solution in it. Tags must also be distinct, since
+        equal spellings collapse and one behaviour vanishes.
+
+        Raises:
+            ScrubberError: On a wrong type, an unusable name, or duplicate tags.
+        """
+        for option in OPTIONS:
+            reject_wrong_type(option.key, getattr(self, option.field), option.type)
+
+        named = {
+            option.key: getattr(self, option.field)
+            for option in OPTIONS
+            if option.build is not None
+        }
+
+        for key, name in named.items():
+            if not is_plain_name(name):
+                raise ScrubberError(
+                    f'{key} must start with a letter and contain only letters, '
+                    f'digits, hyphens and underscores, but got {name!r}',
+                )
+            if not reads_back_as_text(name):
+                raise ScrubberError(
+                    f'{key} must be a name YAML reads back as text, but got '
+                    f'{name!r}, which YAML resolves to another type. Words like '
+                    'yes, no, on, off, true, false and null are not names',
+                )
+
+        tags = tuple(named.values())
+        if len(set(tags)) != len(tags):
+            keys = ', '.join(named)
+            spellings = ', '.join(f'{key}={name!r}' for key, name in named.items())
+            raise ScrubberError(
+                f'{keys} must all be distinct, but got {spellings}',
+            )
+
+    def merged_with(self, data: dict[str, Any]) -> Self:
+        """Return a copy with every option ``data`` mentions overridden.
+
+        Presence decides, not truthiness: a present key is used verbatim.
+
+        Raises:
+            ScrubberError: On a wrong-typed override or duplicate merged tags.
+        """
+        return replace(
+            self,
+            **{
+                option.field: data[option.key]
+                for option in OPTIONS
+                if option.key in data
+            },
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        """Create ScrubbingOptions from a config mapping.
+
+        Raises:
+            ScrubberError: On an unknown key, wrong type, or duplicate tags.
+        """
+        reject_unknown_keys(data, [option.key for option in OPTIONS], 'option')
+        return cls().merged_with(data)
+
+
+@dataclass(frozen=True)
+class _Marked:
+    """A cell an option was found on, as the builders below need to see it."""
+
+    scrubber: Scrubber
     cell_type: str
-    #: The names the cell carries as metadata tags. A tag is presence and
-    #: nothing else, and not every option may be written that way, so a builder
-    #: can still tell which spelling its option arrived in.
+    #: Names carried as metadata tags, so a builder can tell which spelling
+    #: its option arrived in.
     tags: frozenset[str]
     header: Header
 
 
-#: How an option's value becomes the action it describes. One signature across
-#: every option is what makes the precedence order below a table.
+#: How an option's value becomes the action it describes.
 _Build = Callable[[Any, _Marked], CellAction]
 
 
 def _replacement_text(name: str, value: Any, default: str) -> str:
     """The replacement text an option carries; ``default`` when it carries none.
-
-    YAML resolves an unquoted value to a type, so a value that is not text is
-    reported rather than rendered: ``scrub-clear: no`` is a boolean, and
-    clearing a cell to ``False`` is never what the author meant.
 
     Raises:
         ProcessingError: If the value is present but is not text.
@@ -100,14 +174,8 @@ def _replacement_text(name: str, value: Any, default: str) -> str:
     return value
 
 
-def _note_id(value: Any, name: str) -> str:
+def _note_id(name: str, value: Any) -> str:
     """``value`` as the id a note is filed under, trimmed of its whitespace.
-
-    The caller has already taken the id out of whichever spelling of the option
-    carried it, so what arrives here is the id itself either way. ``name`` is
-    the option's configured spelling, which is all the message needs to be
-    advice about the header in front of its author rather than about the
-    default one.
 
     Raises:
         ProcessingError: If the id is missing, empty, or not text.
@@ -120,25 +188,16 @@ def _note_id(value: Any, name: str) -> str:
 
 
 def _note_action(value: Any, marked: _Marked) -> Note:
-    """Build the Note described by a ``scrub-note`` option's value.
+    """Build the Note a ``scrub-note`` describes.
 
-    The value is either the note id on its own, or a mapping carrying ``id``
-    and an optional ``text`` to leave in the cleared cell.
-
-    Two spellings are refused before any of that is read. A metadata tag
-    carries presence and nothing else, so it has nowhere to put the id a note
-    is filed under, and the message names the source-header spelling that does.
-    A non-code cell is refused because the body a note files away is written
-    back as source in the notebook's language, which a markdown cell's content
-    is not.
+    The option carries a note id, or a mapping of ``id`` and optional ``text``.
 
     Raises:
-        ProcessingError: If the option was written as a metadata tag, if the
-            cell is not a code cell, if the id is unusable, if the text is not
-            a string, or if the mapping carries a key the option does not
-            define.
+        ProcessingError: On a metadata tag (nowhere to put the id), a non-code
+            cell, an unusable id, or non-string text.
+        ScrubberError: On an undefined key.
     """
-    opts = marked.opts
+    opts = marked.scrubber.opts
 
     if opts.note_tag in marked.tags:
         raise ProcessingError(
@@ -155,15 +214,12 @@ def _note_action(value: Any, marked: _Marked) -> Note:
     kept = marked.header.kept
 
     if not isinstance(value, dict):
-        return Note(_note_id(value, opts.note_tag), opts.clear_text, body, kept)
+        return Note(_note_id(opts.note_tag, value), opts.clear_text, body, kept)
 
-    try:
-        reject_unknown_keys(value, ('id', 'text'), f'{opts.note_tag} key')
-    except ScrubberError as e:
-        raise ProcessingError(str(e)) from e
+    reject_unknown_keys(value, ('id', 'text'), f'{opts.note_tag} key')
 
     return Note(
-        _note_id(value.get('id'), opts.note_tag),
+        _note_id(opts.note_tag, value.get('id')),
         _replacement_text(
             f'{opts.note_tag}.text',
             value.get('text'),
@@ -174,39 +230,16 @@ def _note_action(value: Any, marked: _Marked) -> Note:
     )
 
 
-def _scrubber_options(opts: ScrubbingOptions) -> tuple[Option, ...]:
-    """The options this tool defines, under their configured spellings.
-
-    Which options are tags, and whether each takes text, is read off the config
-    registry rather than listed again here: an option the parser never hears
-    about is one whose value a YAML comment could silently eat, and one this
-    tool would then go on to ignore. ``takes_text`` is what tells the parser
-    whose values are at risk that way; ``scrub-omit`` carries no value, so it
-    has none to lose.
-    """
-    return tuple(
-        Option(getattr(opts, tag.field), tag.takes_text)
-        for tag in ScrubbingOptions.tags().values()
-    )
-
-
-def _check_one_scrubber_option(
-    header: Header,
-    options: Collection[Option],
-) -> None:
+def _check_one_scrubber_option(header: Header, names: frozenset[str]) -> None:
     """Require the header to carry no more than one scrubber option.
 
-    Under-indented block content is a sibling option as far as YAML is
-    concerned, and reading it as one would silently delete a cell, so the
-    ambiguity is refused. When one of the options present opens a block, the
-    message names it, because that is the line the content belongs under.
+    The reason is that under-indented block content is a sibling option as far
+    as YAML is concerned.
 
     Raises:
         ProcessingError: If more than one scrubber option is present.
     """
-    present = sorted(
-        {option.name for option in options} & header.options.keys(),
-    )
+    present = sorted(names & header.options.keys())
     if len(present) < 2:
         return
 
@@ -223,41 +256,23 @@ def _check_one_scrubber_option(
 def _under_header(kept: str, content: str) -> str:
     """``content`` with the header lines the cell keeps restored above it.
 
-    A cell's option header is shared, so the lines carrying somebody else's
-    options survive a rewrite: they configure the cell that remains, not the
-    content this tool replaced.
-
-    Everything kept goes above the replacement, whatever order it sat in
-    relative to the option that was removed. That is not a tidying choice: a
-    ``#|`` run is only read as options where it is, at the very top of the
-    cell. An option written back below the replacement would be an ordinary
-    comment, and would quietly stop doing anything at all.
+    Kept lines always go above the replacement, whatever their original order: a
+    ``#|`` run is only read as options at the very top of the cell, so one
+    written back below would become an ordinary comment and stop doing anything.
     """
     return f'{kept}\n{content}' if kept else content
 
 
-def _default_clear_text(cell_type: str, opts: ScrubbingOptions) -> str:
-    """The replacement text for a cleared cell whose author supplied none.
-
-    A placeholder has to read as the kind of cell it lands in. The code default
-    is a comment, and dropping a comment into a markdown cell renders it as a
-    heading rather than as the note to the student it is meant to be.
-    """
-    return opts.clear_text_markdown if cell_type == 'markdown' else opts.clear_text
-
-
 def _omit_action(value: Any, marked: _Marked) -> Omit:
     """Build the Omit a ``scrub-omit`` option describes.
-
-    Presence is the whole signal the option carries, so a value means the
-    author expected something the option cannot do.
 
     Raises:
         ProcessingError: If the option carries a value.
     """
     if value is not None:
         raise ProcessingError(
-            f"Option '{marked.opts.omit_tag}' takes no value, but got {value!r}",
+            f"Option '{marked.scrubber.opts.omit_tag}' takes no value, "
+            f'but got {value!r}',
         )
     return Omit()
 
@@ -265,122 +280,89 @@ def _omit_action(value: Any, marked: _Marked) -> Omit:
 def _clear_action(value: Any, marked: _Marked) -> Clear:
     """Build the Clear a ``scrub-clear`` option describes.
 
-    The option's value is the replacement text the cell is left holding. An
-    option carrying none leaves behind the default for the kind of cell it
-    marks, which is why the cell type is consulted here rather than settled
-    once in the options.
-
     Raises:
         ProcessingError: If the value is present but is not text.
     """
     return Clear(
         _replacement_text(
-            marked.opts.clear_tag,
+            marked.scrubber.opts.clear_tag,
             value,
-            _default_clear_text(marked.cell_type, marked.opts),
+            marked.scrubber.default_clear_text(marked.cell_type),
         ),
         marked.header.kept,
     )
 
 
-#: The order the options a cell carries are considered in, named by the config
-#: key naming each. The set of options is the config's to state and this order
-#: is not: which options can be configured is a fact about configuration, while
-#: which one wins on a cell carrying two is a fact about what scrubbing means.
-#: Omit comes first because dropping a cell subsumes every rewrite of it, and
-#: note before clear because a note is a clear that also files away what it
-#: removed.
-_PRECEDENCE_ORDER: tuple[tuple[str, _Build], ...] = (
-    ('omit-tag', _omit_action),
-    ('note-tag', _note_action),
-    ('clear-tag', _clear_action),
+@dataclass(frozen=True)
+class ScrubberOption:
+    """One option this tool defines, declared whole.
+
+    That is: how a config file and the CLI spell it, which
+    :class:`ScrubbingOptions` field holds a run's value for it, and -- for the
+    options that mark cells -- what a cell carrying it becomes. Carrying a
+    ``build`` is what makes an option a cell marker, so ``takes_text`` is read
+    for those and nowhere else.
+    """
+
+    #: TOML key, and the CLI flag spelled ``--<key>``.
+    key: str
+    field: str
+    type: type
+    help: str
+    takes_text: bool = False
+    build: _Build | None = None
+
+
+#: Every option this tool defines, in the order a cell's own options are
+#: considered in: omit first because dropping a cell subsumes every rewrite of
+#: it, and note before clear because a note is a clear that also files away what
+#: it removed. The options carrying no builder mark no cell, so that order never
+#: reaches them and they sit with the option whose replacement text they are.
+OPTIONS: tuple[ScrubberOption, ...] = (
+    ScrubberOption(
+        'omit-tag',
+        'omit_tag',
+        str,
+        'Tag marking cells to omit entirely',
+        build=_omit_action,
+    ),
+    ScrubberOption(
+        'note-tag',
+        'note_tag',
+        str,
+        'Option name marking cells to save to notes',
+        takes_text=True,
+        build=_note_action,
+    ),
+    ScrubberOption(
+        'clear-tag',
+        'clear_tag',
+        str,
+        'Tag marking cells to clear',
+        takes_text=True,
+        build=_clear_action,
+    ),
+    ScrubberOption(
+        'clear-text',
+        'clear_text',
+        str,
+        'Text for cleared cells where unspecified',
+    ),
+    ScrubberOption(
+        'clear-text-markdown',
+        'clear_text_markdown',
+        str,
+        'Text for cleared markdown cells where unspecified',
+    ),
 )
-
-
-def _precedence(
-    order: Collection[tuple[str, _Build]],
-) -> tuple[tuple[TagSpec, _Build], ...]:
-    """``order`` resolved against the registry, refusing an order that is not it.
-
-    The two halves of the split above are checked against each other here, on
-    import, so a tag that gains a place in the registry and not in this order
-    is a traceback rather than a notebook: an option left out of the order is
-    parsed out of a header, checked for ambiguity, and then quietly ignored,
-    which for a tag meaning "omit" means shipping the solution.
-
-    Raises:
-        RuntimeError: If ``order`` does not name every registered tag exactly
-            once.
-    """
-    tags = ScrubbingOptions.tags()
-    named = sorted(key for key, _ in order)
-
-    if named != sorted(tags):
-        raise RuntimeError(
-            'Every scrubber tag needs a place in the precedence order, and '
-            f'only tags belong in it: registered {sorted(tags)}, ordered {named}',
-        )
-
-    return tuple((tags[key], build) for key, build in order)
-
-
-_PRECEDENCE = _precedence(_PRECEDENCE_ORDER)
-
-
-def decide(cell: Cell, opts: ScrubbingOptions) -> CellAction:
-    """Decide what happens to a cell.
-
-    This is the single place that answers that question.
-
-    A cell's source header may carry at most one scrubber option; two is an
-    error, because an under-indented block content line is indistinguishable
-    from a sibling option and silently deleting a cell is the worse outcome.
-    Metadata tags are not subject to that rule.
-
-    A tag carries presence and nothing else, which is exactly what an option
-    written with no value carries, so the two spellings merge into one mapping
-    and a single precedence order covers both. The header wins where both name
-    the same option, because ``header.options`` is merged over the tags. The
-    order is ``_PRECEDENCE_ORDER``'s, which is to say the documented one: omit,
-    then note, then clear. Walking a table rather than a chain of branches is
-    what keeps the order something stated once and read here, instead of
-    something that emerges from which ``if`` happens to be written first.
-
-    Raises:
-        ProcessingError: If the cell's options are malformed, misplaced, or
-            ambiguous.
-    """
-    tags: list[str] = cell.get('metadata', {}).get('tags', [])
-    cell_type = cell.get('cell_type', '')
-    source = get_cell_source(cell)
-    scrubber_options = _scrubber_options(opts)
-    header = parse_cell_options(cell_type, source, scrubber_options)
-
-    _check_one_scrubber_option(header, scrubber_options)
-
-    cell_options: dict[str, Any] = {**dict.fromkeys(tags), **header.options}
-    marked = _Marked(opts, cell_type, frozenset(tags), header)
-
-    for tag, build in _PRECEDENCE:
-        name = getattr(opts, tag.field)
-        if name in cell_options:
-            return build(cell_options[name], marked)
-
-    return Keep()
 
 
 def _without_results(cell: Cell) -> Cell:
     """A copy of ``cell`` carrying none of the results of having been run.
 
     A code cell's ``outputs`` and ``execution_count`` are *required* by the
-    nbformat schema, so they are emptied rather than removed: a cell missing
-    them fails validation, and a notebook that fails validation is a notebook
-    some tool downstream will refuse. Any other cell type must not carry them at
-    all, so there they are dropped.
-
-    The copy is shallow, and that is provably enough: every key touched is
-    rebound to a fresh value rather than mutated in place, and the outputs a
-    deep copy would have duplicated are exactly what is being discarded.
+    nbformat schema, so they are emptied rather than removed; any other cell
+    type must not carry them at all, so there they are dropped.
     """
     updated: Cell = {**cell}
 
@@ -394,24 +376,111 @@ def _without_results(cell: Cell) -> Cell:
     return updated
 
 
-def apply(cell: Cell, action: CellRewrite) -> Cell:
-    """Return a new cell with ``action`` applied; ``cell`` is left alone.
+def _without_scrubber_tags(cell: Cell, names: frozenset[str]) -> Cell:
+    """A copy of ``cell`` carrying none of the metadata tags ``names`` holds.
 
-    ``Omit`` is not accepted: an omitted cell has no output form, so the
-    caller drops it rather than asking for one.
+    Only this tool's names go, and the shared key goes only when nothing else is
+    left -- an empty list would mark the cell just as the tag did.
     """
-    updated = _without_results(cell)
+    metadata = cell.get('metadata', {})
+    tags = metadata.get('tags', [])
 
-    match action:
-        case Keep():
-            return updated
-        case Clear(text=text, header=kept):
-            source = _under_header(kept, text)
-        case Note(note_id=note_id, text=text, header=kept):
-            suffix = f'\n{text}' if text else ''
-            source = _under_header(kept, f'# (See notes: {note_id}){suffix}')
-        case _:
-            assert_never(action)
+    kept = [tag for tag in tags if tag not in names]
+    if len(kept) == len(tags):
+        return cell
 
-    updated['source'] = to_cell_source(cell, source)
-    return updated
+    updated = {**metadata, 'tags': kept}
+    if not kept:
+        del updated['tags']
+
+    return {**cell, 'metadata': updated}
+
+
+@dataclass(frozen=True)
+class Scrubber:
+    """One run's options, resolved once into everything reading a cell needs.
+
+    The spellings a run configures cannot change while it lasts, so the tuple of
+    parser options, the precedence order, and the tag names to strip are all
+    derived up front rather than rebuilt for every cell.
+    """
+
+    opts: ScrubbingOptions
+    #: What :func:`parse_cell_options` is handed.
+    options: tuple[Option, ...]
+    #: Each cell-marking option under this run's spelling, with what that option
+    #: builds, in the precedence order :data:`OPTIONS` states.
+    markers: tuple[tuple[str, _Build], ...]
+    #: The names this tool takes back out of ``metadata.tags``.
+    names: frozenset[str]
+
+    @classmethod
+    def for_options(cls, opts: ScrubbingOptions) -> Self:
+        """The scrubber a run configured by ``opts`` reads its cells with."""
+        marking = tuple(
+            (getattr(opts, option.field), option.takes_text, option.build)
+            for option in OPTIONS
+            if option.build is not None
+        )
+        return cls(
+            opts=opts,
+            options=tuple(Option(name, takes_text) for name, takes_text, _ in marking),
+            markers=tuple((name, build) for name, _, build in marking),
+            names=frozenset(name for name, _, _ in marking),
+        )
+
+    def default_clear_text(self, cell_type: str) -> str:
+        """The replacement text for a cleared cell whose author supplied none.
+
+        A placeholder has to read as the kind of cell it lands in: the code
+        default is a comment, which markdown would render as a heading.
+        """
+        if cell_type == 'markdown':
+            return self.opts.clear_text_markdown
+        return self.opts.clear_text
+
+    def decide(self, cell: Cell) -> CellAction:
+        """Decide what happens to a cell.
+
+        A tag carries presence and nothing else, exactly like a valueless header
+        option, so both spellings merge into one mapping, the header winning.
+
+        Raises:
+            ScrubberError: If the options are malformed, misplaced, or ambiguous.
+        """
+        tags: list[str] = cell.get('metadata', {}).get('tags', [])
+        cell_type = cell.get('cell_type', '')
+        source = get_cell_source(cell)
+        header = parse_cell_options(cell_type, source, self.options)
+
+        _check_one_scrubber_option(header, self.names)
+
+        cell_options: dict[str, Any] = {**dict.fromkeys(tags), **header.options}
+        marked = _Marked(self, cell_type, frozenset(tags), header)
+
+        for name, build in self.markers:
+            if name in cell_options:
+                return build(cell_options[name], marked)
+
+        return Keep()
+
+    def apply(self, cell: Cell, action: CellRewrite) -> Cell:
+        """Return a new cell with ``action`` applied; ``cell`` is left alone.
+
+        ``Omit`` is not accepted: an omitted cell has no output form.
+        """
+        updated = _without_results(_without_scrubber_tags(cell, self.names))
+
+        match action:
+            case Keep():
+                return updated
+            case Clear(text=text, header=kept):
+                source = _under_header(kept, text)
+            case Note(note_id=note_id, text=text, header=kept):
+                suffix = f'\n{text}' if text else ''
+                source = _under_header(kept, f'# (See notes: {note_id}){suffix}')
+            case _:
+                assert_never(action)
+
+        updated['source'] = to_cell_source(cell, source)
+        return updated

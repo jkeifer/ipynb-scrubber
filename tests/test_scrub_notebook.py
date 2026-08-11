@@ -5,8 +5,8 @@ import json
 import subprocess
 import sys
 
+from ipynb_scrubber.actions import OPTIONS, ScrubbingOptions
 from ipynb_scrubber.cli import ScrubNotebook
-from ipynb_scrubber.config import ScrubbingOptions
 from tests.builders import code, make_notebook, markdown
 
 
@@ -173,8 +173,8 @@ def test_failed_notebook_write_survives_a_stdout_without_a_descriptor(
     monkeypatch.setattr(sys, 'stdout', NoDescriptor())
 
     args = argparse.Namespace(notes_file=notes)
-    for spec in ScrubbingOptions.KEYS.values():
-        setattr(args, spec.field, getattr(ScrubbingOptions(), spec.field))
+    for option in OPTIONS:
+        setattr(args, option.field, getattr(ScrubbingOptions(), option.field))
 
     assert ScrubNotebook()(args) == 1
     assert not notes.exists()

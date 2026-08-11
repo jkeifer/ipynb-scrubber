@@ -68,14 +68,14 @@ ipynb-scrubber scrub-notebook < input.ipynb > output.ipynb
 
 #### Options
 
+- `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
+- `--note-tag TAG`: Option name marking cells to save to notes
+  (default: `scrub-note`)
 - `--clear-tag TAG`: Tag marking cells to clear (default: `scrub-clear`)
 - `--clear-text TEXT`: Replacement text for cleared cells where unspecified
   (default: `# TODO: Implement this`)
 - `--clear-text-markdown TEXT`: Replacement text for cleared markdown cells
   where unspecified (default: `*TODO: Implement this*`)
-- `--omit-tag TAG`: Tag marking cells to omit entirely (default: `scrub-omit`)
-- `--note-tag TAG`: Option name marking cells to save to notes
-  (default: `scrub-note`)
 - `--notes-file PATH`: Path to write the notes file, required if any cell
   carries the note tag (see [Notes Files](#notes-files))
 
@@ -112,8 +112,8 @@ The three names must also differ from one another. Pointing two of them at the
 same string would make a marked cell ambiguous, so it is rejected:
 
 ```text
-clear-tag, omit-tag, note-tag must all be distinct, but got
-clear-tag='x', omit-tag='x', note-tag='scrub-note'
+omit-tag, note-tag, clear-tag must all be distinct, but got
+omit-tag='x', note-tag='scrub-note', clear-tag='x'
 ```
 
 #### Examples
@@ -424,6 +424,13 @@ Add tags to cells using Jupyter's tag interface. This works for all cell types
 
 - Add `scrub-clear` tag to solution cells that should be cleared
 - Add `scrub-omit` tag to cells that should be removed entirely
+
+A tag is an instruction to this tool, so it does not survive into the exercise
+notebook: the tag names are removed from `metadata.tags` on the way out, the
+same way the source-header spelling is removed from a cell's source. Tags this
+tool does not define stay, and a cell left with no tags at all loses the empty
+`tags` key rather than carrying one — an empty list where a tag used to be
+would point at the scrubbed cell just as plainly as the tag did.
 
 **Note:** The `scrub-note` option requires source-based syntax (see below) and
 is valid only in code cells; using it elsewhere is an error.
@@ -1009,6 +1016,10 @@ print('Exercise: implement the functions below')
 - **Other cell options are carried through**: Clearing a code cell removes only
   the lines its own options occupy, so the rest of the `#|` header survives
   above the replacement text. A markdown cell's header is replaced whole
+- **No scrubber marking survives**: The output carries neither spelling of this
+  tool's options — the header lines are removed from the source and the tag
+  names from `metadata.tags` — so nothing in an exercise notebook says which
+  cells held the answers. Other tags are left alone
 - **A notebook is scrubbed whole or not at all**: An error anywhere in a
   notebook means no output for it, rather than a partially scrubbed result
 - **A source notebook is never written to**: A config whose paths collide — an
