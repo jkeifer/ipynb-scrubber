@@ -2,7 +2,7 @@ import re
 
 from pathlib import Path
 
-from .exceptions import MissingNotesDestinationError
+from .exceptions import ScrubberError
 
 #: Fence info string for notebooks that declare no kernel language.
 DEFAULT_NOTE_LANGUAGE = 'python'
@@ -58,15 +58,21 @@ def require_destination(
     note_count: int,
     destination: Path | None,
     note_tag: str,
+    remedy: str,
 ) -> None:
     """Refuse to emit notes that have nowhere to go.
 
     The exercise notebook refers to each noted cell by id, so those references
     would dangle.
 
+    ``remedy`` closes the message by telling this front end's caller how to name
+    a destination, since a flag and a config key are not the same advice.
+
     Raises:
-        MissingNotesDestinationError: If notes were collected without a
-            ``destination``.
+        ScrubberError: If notes were collected without a ``destination``.
     """
     if note_count and destination is None:
-        raise MissingNotesDestinationError(note_count, note_tag)
+        raise ScrubberError(
+            f'Found {note_count} cell(s) with note tag "{note_tag}", but '
+            f'nowhere to save the notes. {remedy}',
+        )

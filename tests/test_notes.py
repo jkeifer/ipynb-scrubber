@@ -2,7 +2,7 @@
 
 import pytest
 
-from ipynb_scrubber.exceptions import MissingNotesDestinationError
+from ipynb_scrubber.exceptions import ScrubberError
 from ipynb_scrubber.notes import render_notes, require_destination
 from ipynb_scrubber.staging import commit_all, stage
 
@@ -88,24 +88,20 @@ def test_a_file_that_cannot_be_moved_into_place_leaves_no_temp_file(
 
 
 def test_require_destination_accepts_notes_with_somewhere_to_go(tmp_path):
-    require_destination(1, tmp_path / 'n.md', 'scrub-note')
+    require_destination(1, tmp_path / 'n.md', 'scrub-note', 'Pass --notes-file PATH.')
 
 
 def test_require_destination_ignores_an_absent_destination_with_no_notes():
     """No notes means nothing to lose, so no destination is needed."""
-    require_destination(0, None, 'scrub-note')
+    require_destination(0, None, 'scrub-note', 'Pass --notes-file PATH.')
 
 
-def test_require_destination_names_the_tag_and_the_count_but_no_remedy():
-    """The remedy is the front end's to add, so the core states only the fault.
+def test_require_destination_states_the_fault_and_ends_with_the_remedy():
+    """The message names the count and the tag, and ends with the remedy given."""
+    with pytest.raises(ScrubberError) as exc_info:
+        require_destination(2, None, 'my-note', 'Do the thing.')
 
-    The count and the tag ride on the exception, which is how the front end
-    reaches them to word its own message; the phrasing of ours is not a
-    contract, so it is not asserted.
-    """
-    with pytest.raises(MissingNotesDestinationError) as exc_info:
-        require_destination(2, None, 'my-note')
-
-    assert 'my-note' in str(exc_info.value)
-    assert exc_info.value.note_count == 2
-    assert exc_info.value.note_tag == 'my-note'
+    assert str(exc_info.value) == (
+        'Found 2 cell(s) with note tag "my-note", but nowhere to save the '
+        'notes. Do the thing.'
+    )

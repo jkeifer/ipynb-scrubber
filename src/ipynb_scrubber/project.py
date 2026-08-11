@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .exceptions import MissingNotesDestinationError, ScrubberError, reporting
+from .exceptions import ScrubberError, reporting
 from .notes import require_destination
 from .processor import scrub
 from .staging import commit_all, stage, staged_batch
@@ -35,10 +35,12 @@ def stage_file(entry: FileEntry, staged: list[StagedFile]) -> None:
     result = scrub(data, entry.options)
 
     notes_file = entry.notes_file
-    try:
-        require_destination(result.note_count, notes_file, entry.options.note_tag)
-    except MissingNotesDestinationError as e:
-        raise ScrubberError(f'{e} Set notes-file for this entry in the config.') from e
+    require_destination(
+        result.note_count,
+        notes_file,
+        entry.options.note_tag,
+        'Set notes-file for this entry in the config.',
+    )
 
     with reporting(f'Error writing {entry.output}'):
         staged.append(stage(entry.output, result.notebook_text))
