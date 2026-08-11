@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .exceptions import reporting
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
@@ -74,12 +76,6 @@ def stage(final: Path, content: str) -> StagedFile:
     return StagedFile(temp=temp, final=final)
 
 
-def _commit(staged: Iterable[StagedFile]) -> None:
-    """The rename half of :func:`commit_all`, without the cleanup."""
-    for item in staged:
-        item.temp.replace(item.final)
-
-
 def discard(staged: Iterable[StagedFile]) -> None:
     """Remove staged temporary files, leaving their target paths alone.
 
@@ -99,17 +95,25 @@ def commit_all(staged: Iterable[StagedFile]) -> None:
     """
     items = list(staged)
     try:
-        _commit(items)
+        for item in items:
+            item.temp.replace(item.final)
     finally:
         discard(items)
 
 
 @contextlib.contextmanager
-def staged_batch() -> Iterator[list[StagedFile]]:
-    """Collect staged files, removing them all if the block does not finish.
+def staged_batch(context: str) -> Iterator[list[StagedFile]]:
+    """Collect staged files, committing them all once the block finishes.
 
-    Cleanup runs for any exception, :class:`KeyboardInterrupt` included;
-    committing the yielded batch is the caller's job.
+    The batch is committed on the way out rather than by the caller, so there
+    is no way to stage a batch and write nothing. Nothing lands before the
+    block ends, and no exception lets anything land: cleanup runs for any of
+    them, :class:`KeyboardInterrupt` included.
+
+    ``context`` names what the commit is doing, for the error it may raise.
+
+    Raises:
+        ScrubberError: If a staged file cannot be moved onto its target.
     """
     staged: list[StagedFile] = []
     try:
@@ -117,3 +121,6 @@ def staged_batch() -> Iterator[list[StagedFile]]:
     except BaseException:
         discard(staged)
         raise
+
+    with reporting(context):
+        commit_all(staged)

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from .exceptions import ScrubberError, reporting
 from .notes import require_destination
 from .processor import scrub
-from .staging import commit_all, stage, staged_batch
+from .staging import stage, staged_batch
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -60,12 +60,9 @@ def scrub_files(entries: Iterable[FileEntry]) -> None:
     Raises:
         ScrubberError: If any entry cannot be scrubbed or written.
     """
-    with staged_batch() as staged:
+    with staged_batch('Error writing output') as staged:
         for entry in entries:
             try:
                 stage_file(entry, staged)
             except ScrubberError as e:
                 raise ScrubberError(f'Error processing {entry.input}: {e}') from e
-
-        with reporting('Error writing output'):
-            commit_all(staged)

@@ -13,7 +13,7 @@ from .exceptions import ScrubberError, reporting
 from .notes import require_destination
 from .processor import scrub
 from .project import scrub_files
-from .staging import commit_all, stage, staged_batch
+from .staging import stage, staged_batch
 
 _DEFAULTS = ScrubbingOptions()
 
@@ -107,7 +107,13 @@ class ScrubNotebook:
                 'Pass --notes-file PATH.',
             )
 
-            with staged_batch() as staged:
+            # The batch is committed where this block ends, which is after the
+            # notebook has reached stdout: notes are worth having only alongside
+            # the notebook they annotate, so a consumer that went away mid-write
+            # must not be left a notes file describing what it never got.
+            with staged_batch(
+                'Error writing notes file after the notebook reached stdout',
+            ) as staged:
                 if result.notes_text is not None:
                     with reporting('Error writing notes file'):
                         staged.append(stage(notes_file, result.notes_text))
@@ -123,14 +129,6 @@ class ScrubNotebook:
                 except OSError as e:
                     _discard_unwritable_stdout()
                     raise ScrubberError(f'Error writing output: {e}') from e
-
-                # Committed only now: notes are worth having only alongside the
-                # notebook they annotate, so a consumer that went away mid-write
-                # must not be left a notes file describing what it never got.
-                with reporting(
-                    'Error writing notes file after the notebook reached stdout',
-                ):
-                    commit_all(staged)
 
         except ScrubberError as e:
             printe(f'Error: {e}')
