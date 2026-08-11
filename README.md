@@ -408,9 +408,9 @@ them.
 ### Errors
 
 Every failure caused by input or configuration raises `ScrubberError`, or one
-of its two subclasses: `InvalidNotebookError` when a notebook is not shaped
-like a notebook, and `ProcessingError` when a cell's option header cannot be
-honored. Catching `ScrubberError` catches all of them. Anything else escaping
+of the two subclasses it exports: `InvalidNotebookError` when a notebook is not
+shaped like a notebook, and `ProcessingError` when a cell's option header
+cannot be honored. Catching `ScrubberError` catches all of them. Anything else escaping
 these functions is a defect in this tool rather than a problem with the input.
 
 ## Marking Cells

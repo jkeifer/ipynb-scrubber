@@ -1,15 +1,13 @@
 """Write output files through a staging area, so no half-written result exists.
 
-Content destined for a path is written to a temporary file in that path's own
-directory and moved onto the target with :meth:`pathlib.Path.replace`, a
-rename. Keeping the temporary file in the target's directory matters: a rename
-is atomic only within a single filesystem. A reader therefore sees either the target's
-prior contents or the complete new contents.
+Content goes to a temporary file in the target's own directory and is moved onto
+the target with :meth:`pathlib.Path.replace`. The temporary file must live in
+that directory because a rename is atomic only within a single filesystem; a
+reader then sees either the prior contents or the complete new contents.
 
-The guarantee stops there. Committing several files is several renames rather
-than one transaction, so an interruption partway through a multi-file commit
-can leave some targets updated and others not. Each individual file is still
-whole.
+Committing several files is several renames, not one transaction, so an
+interruption mid-commit can leave some targets updated and others not. Each
+individual file is still whole.
 """
 
 from __future__ import annotations
@@ -24,14 +22,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
-#: Mode given to a staged file whose target does not already exist. A
-#: temporary file is created readable only by its owner, which is wrong for an
-#: ordinary output file.
+#: Mode for a staged file whose target does not exist. Temporary files are
+#: created owner-only, which is wrong for an ordinary output file.
 DEFAULT_FILE_MODE = 0o644
 
-#: Everything this tool writes is UTF-8, never the locale's encoding. A notebook
-#: is UTF-8 by specification and notes are extracted from one, so the locale of
-#: whoever happens to run the tool has no business deciding how they are stored.
+#: Everything this tool writes is UTF-8, never the locale's encoding: a notebook
+#: is UTF-8 by specification and notes are extracted from one.
 ENCODING = 'utf-8'
 
 
@@ -46,24 +42,11 @@ class StagedFile:
 def stage(final: Path, content: str) -> StagedFile:
     """Write the content destined for ``final`` to a temporary file beside it.
 
-    The temporary file is created in ``final``'s own directory, which is
-    created if it does not exist, so that :func:`commit_all` can move it into
-    place with an atomic rename. Nothing at ``final`` is touched.
-
-    The staged file takes ``final``'s mode if ``final`` exists, and
-    :data:`DEFAULT_FILE_MODE` otherwise. It is written as :data:`ENCODING` with
-    newline translation off, so the bytes on disk are the bytes given here.
-
-    Args:
-        final: The path the content is destined for.
-        content: The whole content to write.
-
-    Returns:
-        The staged file, to hand to :func:`commit_all` or :func:`discard`.
+    ``final``'s directory is created if missing, and its mode is taken if it
+    exists.
 
     Raises:
-        OSError: If the directory or the temporary file cannot be created or
-            written.
+        OSError: If the directory or temporary file cannot be written.
     """
     final.parent.mkdir(parents=True, exist_ok=True)
 
@@ -100,13 +83,8 @@ def _commit(staged: Iterable[StagedFile]) -> None:
 def discard(staged: Iterable[StagedFile]) -> None:
     """Remove staged temporary files, leaving their target paths alone.
 
-    Anything already committed is skipped, so discarding after a partial commit
-    removes only what is still staged, and discarding twice is harmless. An
-    error removing a temporary file is suppressed: a discard runs in response to
-    some other failure, and that failure is the one worth reporting.
-
-    Args:
-        staged: The staged files to remove.
+    Safe after a partial commit and safe to repeat; removal errors are
+    suppressed, since a discard runs in response to a more interesting failure.
     """
     for item in staged:
         with contextlib.suppress(OSError):
@@ -114,14 +92,7 @@ def discard(staged: Iterable[StagedFile]) -> None:
 
 
 def commit_all(staged: Iterable[StagedFile]) -> None:
-    """The whole commit protocol: rename everything, then sweep up.
-
-    Sweeping is unconditional because a committed file has already been moved,
-    so a successful commit leaves nothing to remove and a failed one leaves
-    exactly what needs removing.
-
-    Args:
-        staged: The staged files to commit, in the order they should appear.
+    """Rename every staged file onto its target, then sweep up unconditionally.
 
     Raises:
         OSError: If a staged file cannot be moved onto its target.
@@ -137,15 +108,8 @@ def commit_all(staged: Iterable[StagedFile]) -> None:
 def staged_batch() -> Iterator[list[StagedFile]]:
     """Collect staged files, removing them all if the block does not finish.
 
-    Writing a batch is two phases -- stage everything, then commit -- and
-    anything staged has to be removed if the first never reaches the second.
-    Owning the batch here keeps that cleanup in one place and runs it for any
-    exception, :class:`KeyboardInterrupt` included, since a temporary file left
-    beside its target is litter however the run ended.
-
-    Yields:
-        The batch to append staged files to. Committing it stays the caller's,
-        as only the caller knows when the batch is complete.
+    Cleanup runs for any exception, :class:`KeyboardInterrupt` included;
+    committing the yielded batch is the caller's job.
     """
     staged: list[StagedFile] = []
     try:

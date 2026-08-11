@@ -16,11 +16,9 @@ _BACKTICK_RUN = re.compile(r'`+')
 def _fence_for(content: str) -> str:
     """A backtick fence that ``content`` cannot terminate early.
 
-    A noted cell is arbitrary source, and source that prints or documents
-    Markdown contains backtick runs of its own. CommonMark closes a fenced block
-    at the first run at least as long as the one that opened it, so a fence has
-    to be longer than anything inside it or the note ends early and the rest of
-    the document is swallowed as prose.
+    CommonMark closes a fenced block at the first backtick run at least as long
+    as the opening one, so the fence must be longer than any run inside the
+    arbitrary source being fenced.
     """
     longest = max(
         (len(run.group()) for run in _BACKTICK_RUN.finditer(content)),
@@ -32,14 +30,8 @@ def _fence_for(content: str) -> str:
 def render_notes(notes_dict: dict[str, str], language: str | None = None) -> str:
     """Render collected cell notes as a Markdown document.
 
-    Args:
-        notes_dict: Map of note_id -> content.
-        language: Fence info string for the note bodies, i.e. the language the
-            noted cells are written in. ``None`` for a notebook that declares
-            none, which falls back to :data:`DEFAULT_NOTE_LANGUAGE`.
-
-    Returns:
-        The complete notes document.
+    ``language`` is the fence info string; ``None`` uses
+    :data:`DEFAULT_NOTE_LANGUAGE`.
     """
     info = language or DEFAULT_NOTE_LANGUAGE
     parts = [
@@ -69,14 +61,12 @@ def require_destination(
 ) -> None:
     """Refuse to emit notes that have nowhere to go.
 
-    The exercise notebook refers to each noted cell by id, so writing it without
-    somewhere to put the notes leaves every one of those references dangling.
-    That is one rule, enforced here rather than remembered by each front end.
+    The exercise notebook refers to each noted cell by id, so those references
+    would dangle.
 
     Raises:
-        MissingNotesDestinationError: If notes were collected and ``destination``
-            is None. The caller is expected to catch it and say how a
-            destination is named where it is being called from.
+        MissingNotesDestinationError: If notes were collected without a
+            ``destination``.
     """
     if note_count and destination is None:
         raise MissingNotesDestinationError(note_count, note_tag)

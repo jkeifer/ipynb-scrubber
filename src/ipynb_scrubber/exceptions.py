@@ -1,9 +1,5 @@
 class ScrubberError(Exception):
-    """Base exception for ipynb-scrubber errors.
-
-    These exceptions are meant to be caught at the CLI level and
-    displayed as user-friendly error messages without stack traces.
-    """
+    """Base exception, caught at the CLI level and shown without a traceback."""
 
     pass
 
@@ -23,10 +19,8 @@ class ProcessingError(ScrubberError):
 class MissingNotesDestinationError(ScrubberError):
     """Raised when notes were collected but the caller named nowhere for them.
 
-    What went wrong -- this many cells, under this tag -- is the same wherever
-    the run was started from, so it is said once, here. What to do about it is
-    not: one front end wants a flag and the other a config key. A front end
-    catching this appends its own remedy to the message.
+    The message states only what went wrong, since the remedy differs per front
+    end (a flag versus a config key); callers append their own.
     """
 
     def __init__(self, note_count: int, note_tag: str) -> None:
