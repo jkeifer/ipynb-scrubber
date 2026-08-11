@@ -185,6 +185,117 @@ def test_present_notes_file_is_a_path():
     assert entry.notes_file == Path('n.md')
 
 
+def test_scrubbing_onto_the_input_is_rejected():
+    """The whole point is an exercise copy; the original has to survive it."""
+    with pytest.raises(ScrubberError, match='input and output must name'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'a.ipynb'},
+            ScrubbingOptions(),
+        )
+
+
+def test_notes_file_onto_the_input_is_rejected():
+    with pytest.raises(ScrubberError, match='notes-file and input must name'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'notes-file': 'a.ipynb'},
+            ScrubbingOptions(),
+        )
+
+
+def test_notes_file_onto_the_output_is_rejected():
+    """Both are written, so one would silently overwrite the other."""
+    with pytest.raises(ScrubberError, match='notes-file and output must name'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': 'b.ipynb', 'notes-file': 'b.ipynb'},
+            ScrubbingOptions(),
+        )
+
+
+def test_direct_construction_onto_the_input_is_rejected():
+    """__post_init__, so a hand-built entry gets the guarantee a config does."""
+    with pytest.raises(ScrubberError, match='input and output must name'):
+        FileEntry(input=Path('a.ipynb'), output=Path('a.ipynb'))
+
+
+def test_a_leading_dot_slash_does_not_disguise_the_same_path():
+    """Path() normalises './a.ipynb' on the way in, so this is one path."""
+    with pytest.raises(ScrubberError, match='input and output must name'):
+        FileEntry.from_dict(
+            {'input': 'a.ipynb', 'output': './a.ipynb'},
+            ScrubbingOptions(),
+        )
+
+
+def test_two_entries_writing_the_same_output_are_rejected():
+    """Only visible with the whole batch in hand, so ProjectConfig checks it."""
+    with pytest.raises(ScrubberError, match=r'files\[0\]\.output and files\[1\]'):
+        ProjectConfig.from_dict(
+            {
+                'files': [
+                    {'input': 'a.ipynb', 'output': 'out.ipynb'},
+                    {'input': 'b.ipynb', 'output': 'out.ipynb'},
+                ],
+            },
+        )
+
+
+def test_two_entries_writing_the_same_notes_file_are_rejected():
+    with pytest.raises(ScrubberError, match=r'files\[0\]\.notes-file and files\[1\]'):
+        ProjectConfig.from_dict(
+            {
+                'files': [
+                    {'input': 'a.ipynb', 'output': 'a-out.ipynb', 'notes-file': 'n.md'},
+                    {'input': 'b.ipynb', 'output': 'b-out.ipynb', 'notes-file': 'n.md'},
+                ],
+            },
+        )
+
+
+def test_an_entry_writing_over_another_entrys_input_is_rejected():
+    with pytest.raises(ScrubberError, match=r'files\[0\]\.output writes b\.ipynb'):
+        ProjectConfig.from_dict(
+            {
+                'files': [
+                    {'input': 'a.ipynb', 'output': 'b.ipynb'},
+                    {'input': 'b.ipynb', 'output': 'c.ipynb'},
+                ],
+            },
+        )
+
+
+def test_an_entrys_notes_file_over_an_earlier_entrys_input_is_rejected():
+    """A notes file is as capable of destroying a source as an output is."""
+    with pytest.raises(ScrubberError, match=r'files\[1\]\.notes-file writes a\.ipynb'):
+        ProjectConfig.from_dict(
+            {
+                'files': [
+                    {'input': 'a.ipynb', 'output': 'a-out.ipynb'},
+                    {
+                        'input': 'b.ipynb',
+                        'output': 'b-out.ipynb',
+                        'notes-file': 'a.ipynb',
+                    },
+                ],
+            },
+        )
+
+
+def test_distinct_entries_sharing_an_input_are_allowed():
+    """Reading one notebook twice destroys nothing; only writes collide."""
+    config = ProjectConfig.from_dict(
+        {
+            'files': [
+                {'input': 'a.ipynb', 'output': 'plain.ipynb'},
+                {'input': 'a.ipynb', 'output': 'harder.ipynb', 'clear-text': 'X'},
+            ],
+        },
+    )
+    assert [f.output for f in config.files] == [
+        Path('plain.ipynb'),
+        Path('harder.ipynb'),
+    ]
+
+
 def test_unknown_global_option_errors():
     with pytest.raises(ScrubberError, match='claer-tag'):
         ScrubbingOptions.from_dict({'claer-tag': 'x'})
