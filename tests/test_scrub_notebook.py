@@ -39,7 +39,7 @@ def test_flags_reach_the_options(scrub_notebook):
 
 def test_multiline_clear_text_flag_survives_argv(scrub_notebook):
     """A multi-line --clear-text value is passed through argv intact."""
-    nb = make_notebook(code('secret', metadata={'tags': ['scrub-clear']}))
+    nb = make_notebook(code('secret', tags=['scrub-clear']))
     result = scrub_notebook(
         '--clear-text',
         'def add(a, b):\n    # TODO\n    pass',
@@ -63,7 +63,7 @@ def test_clear_text_markdown_flag_is_accepted(scrub_notebook):
 
 def test_note_tag_flag_reaches_the_options(scrub_notebook):
     """A custom --note-tag is used both to detect and to name the tag error."""
-    nb = make_notebook(code('x = 1', metadata={'tags': ['keepme']}))
+    nb = make_notebook(code('x = 1', tags=['keepme']))
     result = scrub_notebook('--note-tag', 'keepme', input_data=json.dumps(nb))
     assert result.returncode == 1
     assert "Option 'keepme' is not supported as a cell tag" in result.stderr
