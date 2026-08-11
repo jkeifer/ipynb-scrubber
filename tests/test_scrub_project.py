@@ -26,7 +26,7 @@ def sample_notebook():
             outputs=[{'data': {'text/plain': ['42']}}],
             execution_count=1,
         ),
-        code("print('instructor only')", metadata={'tags': ['scrub-omit']}),
+        code("print('instructor only')", tags=['scrub-omit']),
     )
 
 

@@ -289,7 +289,7 @@ def test_empty_notebook_is_processed():
 
 
 def test_metadata_tag_clear_uses_configured_default():
-    nb = make_notebook(code('secret = 1', metadata={'tags': ['scrub-clear']}))
+    nb = make_notebook(code('secret = 1', tags=['scrub-clear']))
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == OPTS.clear_text
 
@@ -297,7 +297,7 @@ def test_metadata_tag_clear_uses_configured_default():
 def test_custom_clear_tag():
     """Only the configured clear tag clears; the default tag is inert."""
     nb = make_notebook(
-        code('secret = 1', metadata={'tags': ['answer']}),
+        code('secret = 1', tags=['answer']),
         code('#| scrub-clear:\nother_secret = 2'),
     )
     opts = ScrubbingOptions(clear_tag='answer')
@@ -307,7 +307,7 @@ def test_custom_clear_tag():
 
 
 def test_custom_clear_text():
-    nb = make_notebook(code('secret = 1', metadata={'tags': ['scrub-clear']}))
+    nb = make_notebook(code('secret = 1', tags=['scrub-clear']))
     opts = ScrubbingOptions(clear_text='# YOUR CODE HERE')
     result, _ = process_notebook(nb, opts)
     assert result['cells'][0]['source'] == '# YOUR CODE HERE'
@@ -331,7 +331,7 @@ def test_markdown_cell_clearing():
         ),
         markdown(
             '## Question 2\n\nThis is an answer that should be cleared.',
-            metadata={'tags': ['scrub-clear']},
+            tags=['scrub-clear'],
         ),
         markdown('<!-- scrub-clear: -->\n\n## Question 3\n\nAnother answer to clear.'),
     )
@@ -343,7 +343,7 @@ def test_markdown_cell_clearing():
 
 def test_markdown_default_placeholder_is_not_a_heading():
     """The code default is a comment, which markdown would render as an <h1>."""
-    nb = make_notebook(markdown('answer', metadata={'tags': ['scrub-clear']}))
+    nb = make_notebook(markdown('answer', tags=['scrub-clear']))
     result, _ = process_notebook(nb, OPTS)
 
     assert not result['cells'][0]['source'].startswith('#')
@@ -352,7 +352,7 @@ def test_markdown_default_placeholder_is_not_a_heading():
 def test_raw_cell_clearing_via_tag():
     """Raw cells support only metadata tags, no source-based options."""
     nb = make_notebook(
-        raw('$$\\int_0^1 x^2 dx = \\frac{1}{3}$$', metadata={'tags': ['scrub-clear']}),
+        raw('$$\\int_0^1 x^2 dx = \\frac{1}{3}$$', tags=['scrub-clear']),
     )
     result, _ = process_notebook(nb, OPTS)
     assert result['cells'][0]['source'] == OPTS.clear_text
@@ -360,7 +360,7 @@ def test_raw_cell_clearing_via_tag():
 
 def test_multiline_clear_text_option_survives():
     """A multi-line clear_text value (however configured) reaches the cell."""
-    nb = make_notebook(code('secret', metadata={'tags': ['scrub-clear']}))
+    nb = make_notebook(code('secret', tags=['scrub-clear']))
     opts = ScrubbingOptions(clear_text='def add(a, b):\n    # TODO\n    pass')
     result, _ = process_notebook(nb, opts)
     assert result['cells'][0]['source'] == 'def add(a, b):\n    # TODO\n    pass'
@@ -438,7 +438,7 @@ def test_unterminated_markdown_comment_errors():
 def test_omit_via_metadata_tag():
     nb = make_notebook(
         markdown('# Keep this'),
-        code("print('this should be omitted')", metadata={'tags': ['scrub-omit']}),
+        code("print('this should be omitted')", tags=['scrub-omit']),
         code("print('keep this')"),
     )
     result, _ = process_notebook(nb, OPTS)
@@ -458,8 +458,8 @@ def test_omit_via_source_option():
 
 def test_custom_omit_tag():
     nb = make_notebook(
-        code("print('remove')", metadata={'tags': ['remove-me']}),
-        code("print('keep')", metadata={'tags': ['scrub-omit']}),  # default tag inert
+        code("print('remove')", tags=['remove-me']),
+        code("print('keep')", tags=['scrub-omit']),  # default tag inert
     )
     opts = ScrubbingOptions(omit_tag='remove-me')
     result, _ = process_notebook(nb, opts)
@@ -470,9 +470,9 @@ def test_custom_omit_tag():
 def test_omit_beats_clear_when_both_tags_present():
     nb = make_notebook(
         code('# Cell 0: normal'),
-        code('# Cell 1: solution', metadata={'tags': ['scrub-clear']}),
-        code('# Cell 2: omit', metadata={'tags': ['scrub-omit']}),
-        code('# Cell 3: both tags', metadata={'tags': ['scrub-clear', 'scrub-omit']}),
+        code('# Cell 1: solution', tags=['scrub-clear']),
+        code('# Cell 2: omit', tags=['scrub-omit']),
+        code('# Cell 3: both tags', tags=['scrub-clear', 'scrub-omit']),
     )
     result, _ = process_notebook(nb, OPTS)
     sources = [c['source'] for c in result['cells']]
@@ -500,7 +500,7 @@ def test_metadata_omit_beats_source_note():
     omit-beats-note precedence applies via guard order.
     """
     nb = make_notebook(
-        code('#| scrub-note: ex-1\nsecret = 1', metadata={'tags': ['scrub-omit']}),
+        code('#| scrub-note: ex-1\nsecret = 1', tags=['scrub-omit']),
     )
     result, notes = process_notebook(nb, OPTS)
     assert result['cells'] == []
@@ -512,7 +512,7 @@ def test_omit_metadata_tag_beats_note_metadata_tag():
     nb = make_notebook(
         code(
             'def solution():\n    return 42',
-            metadata={'tags': ['scrub-omit', 'scrub-note']},
+            tags=['scrub-omit', 'scrub-note'],
         ),
         code('print("kept")'),
     )
@@ -679,7 +679,7 @@ def test_note_metadata_tag_errors(cell_type, source):
 def test_note_metadata_tag_with_custom_tag_errors():
     """The error follows a custom note_tag rather than the default name."""
     nb = make_notebook(
-        code('def solution():\n    return 42', metadata={'tags': ['keepme']}),
+        code('def solution():\n    return 42', tags=['keepme']),
     )
     opts = ScrubbingOptions(note_tag='keepme')
     with pytest.raises(
