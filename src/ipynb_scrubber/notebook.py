@@ -18,13 +18,9 @@ class Cell(TypedDict, total=False):
 
 
 class Notebook(TypedDict, total=False):
-    """A notebook, as far as this tool is concerned.
+    """A notebook, of which only ``cells`` and ``metadata`` are read.
 
-    ``cells`` is the only required key, and ``cells`` and ``metadata`` are the
-    only two this tool reads; :func:`validate_notebook` checks the shape of
-    both. ``nbformat`` and ``nbformat_minor`` are declared because notebooks
-    carry them, but they are never inspected. Keys absent from this definition
-    ride along untouched.
+    Keys absent from this definition ride along untouched.
     """
 
     cells: Required[list[Cell]]
@@ -34,12 +30,10 @@ class Notebook(TypedDict, total=False):
 
 
 def get_notebook_language(notebook: Notebook) -> str | None:
-    """Return the notebook's programming language, if it declares one.
+    """The notebook's language, or None if it declares none.
 
-    Jupyter records this in either ``metadata.language_info.name`` or
-    ``metadata.kernelspec.language``; the former is written by the kernel that
-    actually ran and so is preferred. Either may be missing or malformed, in
-    which case the caller supplies its own default.
+    ``metadata.language_info.name`` (written by the kernel that ran) is
+    preferred over ``metadata.kernelspec.language``.
     """
     metadata = notebook.get('metadata', {})
     for section, key in (('language_info', 'name'), ('kernelspec', 'language')):
@@ -61,12 +55,10 @@ def get_cell_source(cell: Cell) -> str:
 def to_cell_source(cell: Cell, text: str) -> str | list[str]:
     """``text``, in the shape ``cell``'s existing source is written in.
 
-    nbformat lets a cell's source be one string or a list of lines, and Jupyter
-    writes the list form. A cell that arrived as a list is handed back as one,
-    so a rewritten cell does not collapse into a single very long line while its
-    untouched neighbours stay line-per-line. That would make the rewrite
-    unreadable in a diff, and would be undone the moment anyone opened the
-    notebook and saved it.
+    nbformat allows one string or a list of lines, and Jupyter writes the list
+    form. Preserving the shape keeps a rewritten cell from collapsing into one
+    long line beside line-per-line neighbours: an unreadable diff, undone the
+    moment anyone opened and saved the notebook.
     """
     if isinstance(cell.get('source'), list):
         return text.splitlines(keepends=True)
@@ -76,12 +68,10 @@ def to_cell_source(cell: Cell, text: str) -> str | list[str]:
 def loads_notebook(data: bytes) -> Any:
     """Parse notebook JSON from raw bytes.
 
-    Bytes rather than text, on purpose. A notebook is UTF-8 by specification,
-    and JSON is self-describing besides: :func:`json.loads` reads the encoding
-    off the leading bytes. Decoding the file here instead would mean choosing an
-    encoding, and the only one available by default is the locale's, which turns
-    a notebook containing an accent into a crash on any machine whose locale is
-    not UTF-8.
+    Bytes rather than text on purpose: encoding is a property of the notebook,
+    not the locale. JSON is self-describing, so :func:`json.loads` reads it off
+    the leading bytes; decoding here would fall back to the locale's, crashing
+    on an accented notebook on a non-UTF-8 machine.
 
     Raises:
         UnicodeDecodeError: If ``data`` is not valid in the encoding it declares.
@@ -93,12 +83,9 @@ def loads_notebook(data: bytes) -> Any:
 def dumps_notebook(notebook: Notebook) -> str:
     """Serialize a notebook the way Jupyter writes one.
 
-    ``ensure_ascii`` is off because Jupyter's own writer leaves it off. Escaping
-    every non-ASCII character to ``\\uXXXX`` round-trips correctly, so nothing is
-    lost, but it turns every notebook holding an accent or an emoji into an
-    unreadable diff against the version Jupyter would have written. The trailing
-    newline is there for the same reason: a file without one is a spurious diff
-    hunk for anything that appends to it.
+    ``ensure_ascii`` is off because Jupyter's writer leaves it off: escaping to
+    ``\\uXXXX`` round-trips fine but makes an unreadable diff against what
+    Jupyter would write. The trailing newline is for the same reason.
     """
     return json.dumps(notebook, indent=NOTEBOOK_INDENT, ensure_ascii=False) + '\n'
 
@@ -151,15 +138,7 @@ def _validate_cell(i: int, cell: Any) -> None:
 
 
 def validate_notebook(notebook: Any) -> Notebook:
-    """Validate that the input is a valid Jupyter notebook.
-
-    Args:
-        notebook: The notebook dictionary to validate
-
-    Returns:
-        The same object, narrowed to :class:`Notebook`. This is the one place
-        the untyped input becomes typed, so downstream code gets checked
-        instead of merely asserted.
+    """Validate the input and return it narrowed to :class:`Notebook`.
 
     Raises:
         InvalidNotebookError: If the notebook is invalid
