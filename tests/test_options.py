@@ -46,6 +46,12 @@ def test_code_option_empty_string() -> None:
     assert result == {'scrub-clear': ''}
 
 
+def test_code_option_quoted_value_expands_its_escapes() -> None:
+    """A double-quoted value is YAML's escaping style, so one line carries two."""
+    result = options('code', '#| scrub-clear: "line one\\nline two"\nprint("x")')
+    assert result == {'scrub-clear': 'line one\nline two'}
+
+
 def test_code_option_value_keeps_its_yaml_type() -> None:
     """'no' resolves to a boolean; the caller decides whether that is usable."""
     result = options('code', '#| scrub-clear: no\nprint("x")')
@@ -109,6 +115,24 @@ def test_code_block_scalar_keeps_an_unmarked_blank_line() -> None:
 def test_code_block_scalar_with_no_content() -> None:
     result = options('code', '#| scrub-clear: |\nprint("x")')
     assert result == {'scrub-clear': ''}
+
+
+def test_code_block_scalar_before_a_sibling_option_keeps_its_final_newline() -> None:
+    """'|' clips: the block keeps a trailing newline only because a line follows.
+
+    The same block written last has none, as test_code_block_scalar shows. The
+    sibling below it is the neighbour's, and the block ends above it.
+    """
+    source = '\n'.join(
+        [
+            '#| scrub-clear: |',
+            '#|   a',
+            '#| echo: false',
+            'print("x")',
+        ],
+    )
+    result = options('code', source)
+    assert result == {'scrub-clear': 'a\n', 'echo': False}
 
 
 def test_header_ends_at_the_first_ordinary_line() -> None:
@@ -209,6 +233,12 @@ def test_markdown_consecutive_self_closing_comments() -> None:
     )
     result = options('markdown', source)
     assert result == {'echo': False, 'scrub-clear': 'hello'}
+
+
+def test_markdown_blank_lines_around_a_comment_are_skipped() -> None:
+    """A markdown cell's header survives the blank line authors write after it."""
+    result = options('markdown', '\n<!-- scrub-clear: -->\n\n## Q')
+    assert result == {'scrub-clear': None}
 
 
 def test_markdown_multi_line_comment() -> None:

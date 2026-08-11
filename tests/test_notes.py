@@ -2,7 +2,6 @@
 
 import pytest
 
-from ipynb_scrubber import staging
 from ipynb_scrubber.exceptions import MissingNotesDestinationError
 from ipynb_scrubber.notes import render_notes, require_destination
 from ipynb_scrubber.staging import commit_all, stage
@@ -79,15 +78,9 @@ def test_write_error_surfaces_as_an_oserror(tmp_path):
 
 def test_a_file_that_cannot_be_moved_into_place_leaves_no_temp_file(
     tmp_path,
-    monkeypatch,
+    failing_commit,
 ):
     """Content is staged beside its target and cleaned up if it cannot land."""
-
-    def boom(staged):
-        raise OSError('rename failed')
-
-    monkeypatch.setattr(staging, '_commit', boom)
-
     with pytest.raises(OSError, match='rename failed'):
         write(tmp_path / 'notes.md', render_notes({'ex-1': 'x = 1'}))
 
@@ -104,12 +97,15 @@ def test_require_destination_ignores_an_absent_destination_with_no_notes():
 
 
 def test_require_destination_names_the_tag_and_the_count_but_no_remedy():
-    """The remedy is the front end's to add, so the core states only the fault."""
+    """The remedy is the front end's to add, so the core states only the fault.
+
+    The count and the tag ride on the exception, which is how the front end
+    reaches them to word its own message; the phrasing of ours is not a
+    contract, so it is not asserted.
+    """
     with pytest.raises(MissingNotesDestinationError) as exc_info:
         require_destination(2, None, 'my-note')
 
-    message = str(exc_info.value)
-    assert '2 cell(s)' in message
-    assert 'my-note' in message
+    assert 'my-note' in str(exc_info.value)
     assert exc_info.value.note_count == 2
     assert exc_info.value.note_tag == 'my-note'

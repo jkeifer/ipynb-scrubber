@@ -101,8 +101,12 @@ def test_markdown_clear_text_is_overridable_per_file():
 @pytest.mark.parametrize('key', [option.key for option in OPTIONS])
 @pytest.mark.parametrize('value', [5, None, 1.5, True, ['x'], {'a': 1}])
 def test_option_values_of_the_wrong_type_are_rejected(key, value):
-    """An untyped TOML value must not reach the dataclass unchecked."""
-    with pytest.raises(ScrubberError, match=f'{key} must be str'):
+    """An untyped TOML value must not reach the dataclass unchecked.
+
+    Which values every option refuses, and nothing about how it says so: the
+    wording is one message, and the test below is where it is pinned.
+    """
+    with pytest.raises(ScrubberError):
         ScrubbingOptions.from_dict({key: value})
 
 

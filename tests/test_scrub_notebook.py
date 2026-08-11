@@ -130,9 +130,10 @@ def test_failed_notebook_write_leaves_no_orphan_notes_file(tmp_path):
         )
 
     assert result.returncode == 1
-    assert result.stderr.strip() == (
-        'Error: Error writing output: [Errno 9] Bad file descriptor'
-    )
+    # The errno and the platform's wording for it belong to libc, so only the
+    # part this tool is responsible for is asserted.
+    assert 'Traceback' not in result.stderr
+    assert 'Error writing output' in result.stderr
     # Neither the notes file nor the temporary it was staged as.
     assert [p.name for p in tmp_path.iterdir()] == ['sink']
 

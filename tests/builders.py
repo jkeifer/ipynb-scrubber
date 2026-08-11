@@ -46,26 +46,16 @@ def _cell(
     list left at the cell's top level is a tag nothing acts on.
 
     Metadata composes: ``tags`` is added to whatever ``metadata=`` supplied
-    rather than replacing it. The single case where the two could disagree --
-    a ``metadata=`` that already carries tags -- is refused instead of being
-    settled silently in either direction.
+    rather than replacing it.
 
     A cell given no tags carries no metadata key at all. Cells arrive that way
     from the wild, and make_notebook fills the key in for the tests that want
     it filled, so the builders leave it to the tests that do not.
-
-    Raises:
-        TypeError: If tags are given both ways.
     """
     cell = {'cell_type': cell_type, 'source': source, **kw}
 
     if tags is not None:
-        metadata = cell.get('metadata', {})
-        if 'tags' in metadata:
-            raise TypeError(
-                "tags given twice: pass either tags= or a metadata= carrying 'tags'",
-            )
-        cell['metadata'] = {**metadata, 'tags': tags}
+        cell['metadata'] = {**cell.get('metadata', {}), 'tags': tags}
 
     return cast(Cell, cell)
 
