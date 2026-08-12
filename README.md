@@ -384,6 +384,8 @@ arrived as, so the library that read it is the library that writes it:
 ```python
 import jupytext
 
+from pathlib import Path
+
 from ipynb_scrubber import ScrubbingOptions, scrub_parsed
 
 notebook = jupytext.reads(Path('lesson.py').read_text(), fmt='py:percent')
@@ -414,6 +416,8 @@ without touching a single file. It takes the raw bytes of a notebook and
 returns a `ScrubResult` holding the text of every output:
 
 ```python
+from pathlib import Path
+
 from ipynb_scrubber import ScrubbingOptions, scrub
 
 result = scrub(Path('lecture.ipynb').read_bytes(), ScrubbingOptions())
@@ -515,10 +519,17 @@ YAML and an option is a 'name: value' entry, so write 'scrub-omit:'
 
 The header is shared with whatever else writes in the same comments, so
 ownership is settled one entry at a time: only an entry whose key is a scrubber
-option is the tool's to read, or to complain about. A `#|-----` divider, a
-neighbour's repeated `fig-cap:`, and a `#| 12: hello` whose name is not text
-are all left alone rather than failing the run — including in a header that
-carries a scrubber option too.
+option is the tool's to read, or to complain about. A neighbour's repeated
+`fig-cap:`, and a `#| 12: hello` whose name is not text, are left alone rather
+than failing the run — including in a header that carries a scrubber option
+too.
+
+That reprieve is for a neighbour the header still parses *with*. A neighbour
+that stops the header being YAML at all is a different matter. A `#|-----`
+divider on its own is fine — it is a YAML scalar, and a header holding no
+mapping and naming no scrubber option yields no options rather than an error.
+Put it above a `#| scrub-clear:`, though, and the two together are not YAML,
+so the run fails: see "A header that is not well-formed YAML" below.
 
 Ownership is read off the parsed header, never guessed from the raw text. Only
 a key names an option, so neither a scrubber name buried in a longer key
