@@ -411,8 +411,8 @@ from ipynb_scrubber import ScrubbingOptions, scrub
 result = scrub(Path('lecture.ipynb').read_bytes(), ScrubbingOptions())
 
 result.notebook_text  # the exercise notebook, serialized as Jupyter writes it
-result.notes_text     # the rendered notes, or None if no cell was noted
-result.note_count     # how many cells were noted
+result.notes_text  # the rendered notes, or None if no cell was noted
+result.note_count  # how many cells were noted
 ```
 
 Bytes rather than text, because a notebook's encoding is a property of the
