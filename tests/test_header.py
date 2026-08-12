@@ -286,6 +286,54 @@ def test_markdown_comment_content_is_not_read_as_options() -> None:
     assert result == {'scrub-clear': '<!-- scrub-omit: -->'}
 
 
+@pytest.mark.parametrize(
+    'comment',
+    [
+        '<!-- @format -->',
+        '<!-- {% raw %} -->',
+        '<!-- % a latex-style note -->',
+        '<!-- &copy; 2024 -->',
+        '<!-- author: Jane\n     date: 2024 -->',
+        '<!-- a note: with a second: colon -->',
+        '<!-- never closed',
+    ],
+)
+def test_markdown_comment_naming_no_option_is_left_alone(comment: str) -> None:
+    """An HTML comment is ordinary markdown, not a header shared with this tool.
+
+    A '#|' run is a convention this tool takes part in, so a malformed one is
+    worth reporting. A comment left by a formatter or a site generator is not,
+    and reading every one as YAML would fail a run over punctuation in a cell
+    this tool has no business touching.
+    """
+    source = f'{comment}\n# A heading'
+    assert options('markdown', source) == {}
+    assert parse_cell_options('markdown', source, PARSED_OPTIONS).body == source
+
+
+def test_markdown_comment_naming_an_option_is_still_read_strictly() -> None:
+    """Naming an option is what makes a comment this tool's to complain about."""
+    with pytest.raises(ProcessingError, match='missing its colon'):
+        options('markdown', '<!-- scrub-omit -->\n# Answer')
+
+
+def test_markdown_option_beside_a_foreign_comment_still_parses() -> None:
+    """Naming an option puts the whole comment run back in play, siblings and all."""
+    source = '<!-- echo: false -->\n<!-- scrub-omit: -->\n# Answer'
+    assert options('markdown', source) == {'echo': False, 'scrub-omit': None}
+
+
+def test_markdown_foreign_comment_beside_an_option_must_still_be_yaml() -> None:
+    """The limit of the reprieve above: one header, so one document to parse.
+
+    A comment naming no option is left alone, but once a sibling names one the
+    run is this tool's to read and a neighbour that is not YAML fails it. Say
+    so plainly rather than guess which half of a header the author meant.
+    """
+    with pytest.raises(ProcessingError, match='Invalid cell option header'):
+        options('markdown', '<!-- @format -->\n<!-- scrub-omit: -->\n# Answer')
+
+
 def test_duplicate_option_name_raises() -> None:
     with pytest.raises(ProcessingError, match=r"Duplicate option 'scrub-clear'"):
         options('code', '#| scrub-clear: first\n#| scrub-clear: second')

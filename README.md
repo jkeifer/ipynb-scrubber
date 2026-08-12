@@ -533,6 +533,22 @@ An unquoted `:` in a value is much the likeliest way a header stops being YAML,
 because a caption like `fig-cap: Figure 1: Temperature` is the natural thing to
 write. Quoting it is what Quarto asks for too, so the fix serves both readers.
 
+That rule applies to code cells, where `#|` is a convention this tool shares
+with Quarto and malformed text is broken for both readers. A markdown cell is
+different: an HTML comment is ordinary markdown, not a header anyone agreed to
+share, and a notebook is full of comments left by formatters and site
+generators. So a markdown cell's leading comments are read as a header only if
+one of the scrubber option names appears in the cell at all; otherwise they are
+left exactly as written. A `<!-- @format -->` or a `<!-- {% raw %} -->` passes
+through untouched instead of failing the run.
+
+Naming an option puts the whole comment run back in play, siblings included —
+so a neighbouring comment that is not YAML will still fail a cell that also
+carries a `<!-- scrub-omit: -->`. The test is deliberately loose in the safe
+direction: it can only cause the tool to look at a header it turns out not to
+own, never to pass over one it does. An option spelled anything other than its
+configured name does nothing regardless, so there is no marking this can miss.
+
 #### Code Cells - Quarto Options
 
 ```python
