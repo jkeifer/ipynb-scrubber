@@ -18,8 +18,8 @@ from typing import Any
 import nbformat
 import pytest
 
-from ipynb_scrubber.actions import ScrubbingOptions
 from ipynb_scrubber.notebook import evolve
+from ipynb_scrubber.options import ScrubbingOptions
 from ipynb_scrubber.processor import process_notebook
 from tests.builders import code, make_notebook, markdown, raw
 

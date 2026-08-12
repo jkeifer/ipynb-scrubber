@@ -7,10 +7,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NoReturn
 
-from .actions import OPTIONS, ScrubbingOptions
 from .config import ProjectConfig
 from .exceptions import ScrubberError, reporting
 from .notes import require_destination
+from .options import OPTIONS, ScrubbingOptions
 from .processor import scrub
 from .project import scrub_files
 from .staging import stage, staged_batch

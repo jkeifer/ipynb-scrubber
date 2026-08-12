@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
-from .actions import OPTIONS, ScrubbingOptions
 from .exceptions import ScrubberError
+from .options import OPTIONS, ScrubbingOptions
 from .validation import reject_unknown_keys, reject_wrong_type
 
 

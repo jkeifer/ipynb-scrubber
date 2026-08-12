@@ -14,7 +14,7 @@ import jupytext
 import pytest
 
 from ipynb_scrubber import scrub_parsed
-from ipynb_scrubber.actions import ScrubbingOptions
+from ipynb_scrubber.options import ScrubbingOptions
 
 OPTS = ScrubbingOptions()
 

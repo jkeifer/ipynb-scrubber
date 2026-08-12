@@ -8,8 +8,8 @@ import sys
 import pytest
 
 from ipynb_scrubber import cli
-from ipynb_scrubber.actions import OPTIONS, ScrubbingOptions
 from ipynb_scrubber.exceptions import ScrubberError
+from ipynb_scrubber.options import OPTIONS, ScrubbingOptions
 from tests.builders import code, make_notebook, markdown, raw
 
 

@@ -8,7 +8,9 @@ about a tag nothing acts on.
 
 import pytest
 
-from ipynb_scrubber.actions import Omit, Scrubber, ScrubbingOptions
+from ipynb_scrubber.actions import Omit
+from ipynb_scrubber.options import ScrubbingOptions
+from ipynb_scrubber.scrubber import Scrubber
 from tests.builders import code, markdown, raw, schema_valid_code
 
 OPTS = ScrubbingOptions()

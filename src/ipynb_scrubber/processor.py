@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from .actions import Note, Omit, Scrubber, ScrubbingOptions
+from .actions import Note, Omit
 from .exceptions import ProcessingError, ScrubberError
 from .notebook import (
     Cell,
@@ -18,6 +18,8 @@ from .notebook import (
     validate_notebook,
 )
 from .notes import render_notes
+from .options import ScrubbingOptions
+from .scrubber import Scrubber
 
 
 def process_notebook(

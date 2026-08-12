@@ -14,9 +14,9 @@ import sys
 import nbformat
 import pytest
 
-from ipynb_scrubber.actions import ScrubbingOptions
 from ipynb_scrubber.config import FileEntry
 from ipynb_scrubber.notebook import dumps_notebook
+from ipynb_scrubber.options import ScrubbingOptions
 from ipynb_scrubber.processor import process_notebook
 from ipynb_scrubber.project import scrub_files
 
