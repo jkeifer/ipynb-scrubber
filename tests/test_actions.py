@@ -155,6 +155,26 @@ def test_tag_omit_plus_source_note_is_allowed():
     assert SCRUBBER.decide(cell) == Omit()
 
 
+def test_source_omit_plus_tag_clear_is_allowed():
+    """The mirror of the above: precedence is the marker's, not the spelling's.
+
+    Whichever way round the two names are written, the earlier marker wins, so
+    neither source of names is privileged over the other.
+    """
+    cell = code('#| scrub-omit:\nx = 1', tags=['scrub-clear'])
+    assert SCRUBBER.decide(cell) == Omit()
+
+
+def test_a_headers_value_beats_the_same_name_as_a_tag():
+    """One name, written both ways: only the header can carry a value at all.
+
+    A tag says nothing but 'present', so letting it answer for a name the
+    header spells out would throw the author's replacement text away.
+    """
+    cell = code('#| scrub-clear: from the header\nx = 1', tags=['scrub-clear'])
+    assert SCRUBBER.decide(cell) == Clear('from the header')
+
+
 @pytest.mark.parametrize('builder', [code, markdown, raw])
 def test_note_as_tag_errors(builder):
     """A tag carries no id, whatever kind of cell it is written on."""
