@@ -30,7 +30,7 @@ jobs:
       - name: Pre-Commit Hooks
         run: uv run prek --all-files
       - name: Test
-        run: uv run pytest
+        run: uv run pytest --cov-report=xml
       - name: "Upload coverage to Codecov"
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         env:
