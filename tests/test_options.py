@@ -4,7 +4,12 @@ import pytest
 
 from ipynb_scrubber.exceptions import ScrubberError
 from ipynb_scrubber.notebook import CELL_TYPES
-from ipynb_scrubber.options import _CLEAR_TEXT_FIELDS, MARKERS, ScrubbingOptions
+from ipynb_scrubber.options import (
+    _CLEAR_TEXT_FIELDS,
+    MARKERS,
+    OPTIONS,
+    ScrubbingOptions,
+)
 
 
 def test_markers_are_considered_omit_then_note_then_clear():
@@ -26,6 +31,20 @@ def test_every_cell_type_has_its_own_clear_text():
     does not name would be a KeyError on a notebook the tool accepted.
     """
     assert set(_CLEAR_TEXT_FIELDS) == set(CELL_TYPES)
+
+
+def test_markdown_clear_text_is_a_separate_option():
+    """A cleared markdown cell must not render its placeholder as a heading."""
+    defaults = ScrubbingOptions()
+    assert defaults.clear_text_markdown == '*TODO: Implement this*'
+    assert defaults.clear_text_markdown != defaults.clear_text
+
+
+def test_raw_clear_text_is_a_separate_option():
+    """A raw cell is emitted verbatim, so its placeholder carries no markup."""
+    defaults = ScrubbingOptions()
+    assert defaults.clear_text_raw == 'TODO: Implement this'
+    assert defaults.clear_text_raw != defaults.clear_text
 
 
 def test_direct_construction_with_a_wrong_type_is_rejected():
@@ -98,3 +117,109 @@ def test_replace_still_revalidates():
     """Freezing must not cost the check replace() runs for per-file overrides."""
     with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
         dataclasses.replace(ScrubbingOptions(), omit_tag='no')
+
+
+def test_merged_with_is_presence_based_not_truthiness_based():
+    merged = ScrubbingOptions(clear_text='GLOBAL', clear_tag='theirs').merged_with(
+        {'clear-text': ''},
+    )
+    assert merged.clear_text == ''
+    assert merged.clear_tag == 'theirs'
+
+
+def test_global_empty_clear_text_is_preserved():
+    """Presence decides in from_dict too, so '' is a value and not an absence.
+
+    The rule itself. test_config.py holds its twin, which pins that a file
+    entry's override path reaches this rather than restating it.
+    """
+    assert ScrubbingOptions.from_dict({'clear-text': ''}).clear_text == ''
+
+
+def test_markdown_clear_text_is_configurable_globally():
+    """A config mapping can replace the markdown placeholder.
+
+    The option itself. Its twin in test_config.py pins only that a per-file
+    override reaches it, so neither test covers the other.
+    """
+    opts = ScrubbingOptions.from_dict({'clear-text-markdown': '_do this_'})
+    assert opts.clear_text_markdown == '_do this_'
+
+
+def test_raw_clear_text_is_configurable_globally():
+    """A config mapping can replace the raw placeholder.
+
+    The option itself. Its twin in test_config.py pins only that a per-file
+    override reaches it, so neither test covers the other.
+    """
+    opts = ScrubbingOptions.from_dict({'clear-text-raw': 'do this'})
+    assert opts.clear_text_raw == 'do this'
+
+
+def test_note_reference_is_configurable_globally():
+    """The marker is a comment, and not every kernel spells one with '#'.
+
+    The option itself. Its twin in test_config.py pins only that a per-file
+    override reaches it, so neither test covers the other.
+    """
+    opts = ScrubbingOptions.from_dict({'note-reference': '// (See notes: {id})'})
+    assert opts.note_reference == '// (See notes: {id})'
+
+
+@pytest.mark.parametrize('key', [option.key for option in OPTIONS])
+@pytest.mark.parametrize('value', [5, None, 1.5, True, ['x'], {'a': 1}])
+def test_option_values_of_the_wrong_type_are_rejected(key, value):
+    """An untyped TOML value must not reach the dataclass unchecked.
+
+    Which values every option refuses, and nothing about how it says so: the
+    wording is one message, and the test below is where it is pinned. The twin
+    in test_config.py pins that a file entry's override path reaches this rule,
+    not the rule again.
+    """
+    with pytest.raises(ScrubberError):
+        ScrubbingOptions.from_dict({key: value})
+
+
+def test_wrong_type_error_names_the_type_and_the_value():
+    with pytest.raises(ScrubberError, match=r'clear-tag must be str.*int: 5'):
+        ScrubbingOptions.from_dict({'clear-tag': 5})
+
+
+def test_unknown_global_option_errors():
+    """An option table takes the option keys and nothing else.
+
+    Its counterpart in test_config.py is a different key table -- a file entry
+    also takes input, output and notes-file -- and not this rule again.
+    """
+    with pytest.raises(ScrubberError, match='claer-tag'):
+        ScrubbingOptions.from_dict({'claer-tag': 'x'})
+
+
+def test_an_unusable_tag_name_is_rejected_from_dict():
+    """from_dict merges into replace(), so a config mapping cannot evade the rule.
+
+    The name rule itself is pinned above, on the constructor. The twin in
+    test_config.py pins the same for a file entry's override path.
+    """
+    with pytest.raises(ScrubberError, match='must start with a letter'):
+        ScrubbingOptions.from_dict({'omit-tag': 'not a name'})
+
+
+def test_a_tag_name_yaml_reads_as_a_bool_is_rejected_from_dict():
+    """from_dict merges into replace(), so a config mapping cannot evade the rule.
+
+    The name rule itself is pinned above, on the constructor. The twin in
+    test_config.py pins the same for a file entry's override path.
+    """
+    with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
+        ScrubbingOptions.from_dict({'omit-tag': 'no'})
+
+
+def test_colliding_tags_are_rejected_from_dict():
+    """from_dict merges into replace(), so a config mapping cannot evade the rule.
+
+    The distinctness rule itself is pinned above, on the constructor. The twin
+    in test_config.py pins the same for a file entry's override path.
+    """
+    with pytest.raises(ScrubberError, match='must all be distinct'):
+        ScrubbingOptions.from_dict({'clear-tag': 'dup', 'omit-tag': 'dup'})

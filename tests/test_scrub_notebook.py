@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from ipynb_scrubber import cli
+from ipynb_scrubber.cli import build_parser
 from ipynb_scrubber.exceptions import ScrubberError
 from ipynb_scrubber.options import OPTIONS, ScrubbingOptions
 from tests.builders import code, make_notebook, markdown, raw
@@ -26,6 +27,15 @@ def test_output_is_valid_json_indented_by_one(scrub_notebook):
     assert result.returncode == 0
     assert json.loads(result.stdout)
     assert '\n "cells"' in result.stdout
+
+
+def test_every_registered_option_gets_a_cli_flag():
+    """The registry is the single source of truth, including for the CLI."""
+    args = build_parser().parse_args(['scrub-notebook'])
+
+    for option in OPTIONS:
+        assert getattr(args, option.field) == getattr(ScrubbingOptions(), option.field)
+        assert option.help, f'{option.key} has no help text'
 
 
 def test_flags_reach_the_options(scrub_notebook):

@@ -10,15 +10,16 @@ from ipynb_scrubber.options import OPTIONS, ScrubbingOptions
 
 
 def test_file_level_empty_clear_text_is_preserved():
+    """The presence rule survives the per-file override path.
+
+    Not the rule itself -- that is test_options.py's, on ScrubbingOptions --
+    but that a file entry hands its keys over with their emptiness intact.
+    """
     entry = FileEntry.from_dict(
         {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-text': ''},
         ScrubbingOptions(),
     )
     assert entry.options.clear_text == ''
-
-
-def test_global_empty_clear_text_is_preserved():
-    assert ScrubbingOptions.from_dict({'clear-text': ''}).clear_text == ''
 
 
 def test_absent_file_option_falls_back_to_global():
@@ -37,14 +38,6 @@ def test_file_option_overrides_global():
     assert entry.options.clear_tag == 'mine'
 
 
-def test_merged_with_is_presence_based_not_truthiness_based():
-    merged = ScrubbingOptions(clear_text='GLOBAL', clear_tag='theirs').merged_with(
-        {'clear-text': ''},
-    )
-    assert merged.clear_text == ''
-    assert merged.clear_tag == 'theirs'
-
-
 def test_config_resolves_options_per_file():
     config = ProjectConfig.from_dict(
         {
@@ -58,30 +51,12 @@ def test_config_resolves_options_per_file():
     assert [f.options.clear_text for f in config.files] == ['GLOBAL', 'MINE']
 
 
-def test_every_registered_option_gets_a_cli_flag():
-    """The registry is the single source of truth, including for the CLI."""
-    from ipynb_scrubber.cli import build_parser
-
-    args = build_parser().parse_args(['scrub-notebook'])
-
-    for option in OPTIONS:
-        assert getattr(args, option.field) == getattr(ScrubbingOptions(), option.field)
-        assert option.help, f'{option.key} has no help text'
-
-
-def test_markdown_clear_text_is_a_separate_option():
-    """A cleared markdown cell must not render its placeholder as a heading."""
-    defaults = ScrubbingOptions()
-    assert defaults.clear_text_markdown == '*TODO: Implement this*'
-    assert defaults.clear_text_markdown != defaults.clear_text
-
-
-def test_markdown_clear_text_is_configurable_globally():
-    opts = ScrubbingOptions.from_dict({'clear-text-markdown': '_do this_'})
-    assert opts.clear_text_markdown == '_do this_'
-
-
 def test_markdown_clear_text_is_overridable_per_file():
+    """The option survives the per-file override path.
+
+    That the option exists and that a config mapping sets it is
+    test_options.py's; this is only that a file entry can override it.
+    """
     entry = FileEntry.from_dict(
         {
             'input': 'a.ipynb',
@@ -93,19 +68,12 @@ def test_markdown_clear_text_is_overridable_per_file():
     assert entry.options.clear_text_markdown == '_mine_'
 
 
-def test_raw_clear_text_is_a_separate_option():
-    """A raw cell is emitted verbatim, so its placeholder carries no markup."""
-    defaults = ScrubbingOptions()
-    assert defaults.clear_text_raw == 'TODO: Implement this'
-    assert defaults.clear_text_raw != defaults.clear_text
-
-
-def test_raw_clear_text_is_configurable_globally():
-    opts = ScrubbingOptions.from_dict({'clear-text-raw': 'do this'})
-    assert opts.clear_text_raw == 'do this'
-
-
 def test_raw_clear_text_is_overridable_per_file():
+    """The option survives the per-file override path.
+
+    That the option exists and that a config mapping sets it is
+    test_options.py's; this is only that a file entry can override it.
+    """
     entry = FileEntry.from_dict(
         {
             'input': 'a.ipynb',
@@ -117,13 +85,12 @@ def test_raw_clear_text_is_overridable_per_file():
     assert entry.options.clear_text_raw == 'mine'
 
 
-def test_note_reference_is_configurable_globally():
-    """The marker is a comment, and not every kernel spells one with '#'."""
-    opts = ScrubbingOptions.from_dict({'note-reference': '// (See notes: {id})'})
-    assert opts.note_reference == '// (See notes: {id})'
-
-
 def test_note_reference_is_overridable_per_file():
+    """The option survives the per-file override path.
+
+    That the option exists and that a config mapping sets it is
+    test_options.py's; this is only that a file entry can override it.
+    """
     entry = FileEntry.from_dict(
         {
             'input': 'a.ipynb',
@@ -136,24 +103,12 @@ def test_note_reference_is_overridable_per_file():
 
 
 @pytest.mark.parametrize('key', [option.key for option in OPTIONS])
-@pytest.mark.parametrize('value', [5, None, 1.5, True, ['x'], {'a': 1}])
-def test_option_values_of_the_wrong_type_are_rejected(key, value):
-    """An untyped TOML value must not reach the dataclass unchecked.
-
-    Which values every option refuses, and nothing about how it says so: the
-    wording is one message, and the test below is where it is pinned.
-    """
-    with pytest.raises(ScrubberError):
-        ScrubbingOptions.from_dict({key: value})
-
-
-def test_wrong_type_error_names_the_type_and_the_value():
-    with pytest.raises(ScrubberError, match=r'clear-tag must be str.*int: 5'):
-        ScrubbingOptions.from_dict({'clear-tag': 5})
-
-
-@pytest.mark.parametrize('key', [option.key for option in OPTIONS])
 def test_file_level_option_of_the_wrong_type_is_rejected(key):
+    """The type check survives the per-file override path.
+
+    Which values every option refuses, and how it says so, is test_options.py's;
+    this is that a file entry's override reaches that check at all.
+    """
     with pytest.raises(ScrubberError, match=f'{key} must be str'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', key: 5},
@@ -305,12 +260,12 @@ def test_distinct_entries_sharing_an_input_are_allowed():
     ]
 
 
-def test_unknown_global_option_errors():
-    with pytest.raises(ScrubberError, match='claer-tag'):
-        ScrubbingOptions.from_dict({'claer-tag': 'x'})
-
-
 def test_unknown_file_entry_key_errors():
+    """A file entry takes the option keys plus its own three, and nothing else.
+
+    The option table has its own version of this in test_options.py; the two
+    key sets differ, so neither test covers the other.
+    """
     with pytest.raises(ScrubberError, match='notes-fil'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', 'notes-fil': 'n.md'},
@@ -352,13 +307,12 @@ def test_direct_construction_defaults_to_default_options():
     assert entry.options == ScrubbingOptions()
 
 
-def test_an_unusable_tag_name_is_rejected_from_dict():
-    with pytest.raises(ScrubberError, match='must start with a letter'):
-        ScrubbingOptions.from_dict({'omit-tag': 'not a name'})
-
-
 def test_file_override_with_an_unusable_tag_name_is_rejected():
-    """The merge goes through replace(), so __post_init__ catches it."""
+    """The merge goes through replace(), so __post_init__ catches it.
+
+    The name rule itself is test_options.py's; this is that a per-file override
+    is not a way around it.
+    """
     with pytest.raises(ScrubberError, match='must start with a letter'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'has space'},
@@ -366,13 +320,12 @@ def test_file_override_with_an_unusable_tag_name_is_rejected():
         )
 
 
-def test_a_tag_name_yaml_reads_as_a_bool_is_rejected_from_dict():
-    with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
-        ScrubbingOptions.from_dict({'omit-tag': 'no'})
-
-
 def test_file_override_with_a_tag_name_yaml_reads_as_a_bool_is_rejected():
-    """The merge goes through replace(), so __post_init__ catches it."""
+    """The merge goes through replace(), so __post_init__ catches it.
+
+    The name rule itself is test_options.py's; this is that a per-file override
+    is not a way around it.
+    """
     with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'null'},
@@ -380,13 +333,12 @@ def test_file_override_with_a_tag_name_yaml_reads_as_a_bool_is_rejected():
         )
 
 
-def test_colliding_tags_are_rejected_from_dict():
-    with pytest.raises(ScrubberError, match='must all be distinct'):
-        ScrubbingOptions.from_dict({'clear-tag': 'dup', 'omit-tag': 'dup'})
-
-
 def test_file_override_colliding_with_inherited_tag_is_rejected():
-    """The merge goes through replace(), so __post_init__ catches it."""
+    """The merge goes through replace(), so __post_init__ catches it.
+
+    The distinctness rule itself is test_options.py's; this is that an override
+    colliding with a tag it inherited is not a way around it.
+    """
     with pytest.raises(ScrubberError, match='must all be distinct'):
         FileEntry.from_dict(
             {'input': 'a.ipynb', 'output': 'b.ipynb', 'clear-tag': 'scrub-omit'},
