@@ -1,9 +1,9 @@
 """ipynb-scrubber: Generate exercise versions of Jupyter notebooks."""
 
-from .actions import ScrubbingOptions
 from .config import FileEntry, ProjectConfig
 from .exceptions import InvalidNotebookError, ProcessingError, ScrubberError
 from .notebook import Cell, Notebook
+from .options import ScrubbingOptions
 from .processor import (
     NotebookScrubResult,
     ScrubResult,

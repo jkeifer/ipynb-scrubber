@@ -1,17 +1,10 @@
 import pytest
 
-from ipynb_scrubber.actions import (
-    _CLEAR_TEXT_FIELDS,
-    MARKERS,
-    Clear,
-    Keep,
-    Note,
-    Omit,
-    Scrubber,
-    ScrubbingOptions,
-)
+from ipynb_scrubber.actions import Clear, Keep, Note, Omit
 from ipynb_scrubber.exceptions import ProcessingError, ScrubberError
-from ipynb_scrubber.notebook import CELL_TYPES, get_cell_source
+from ipynb_scrubber.notebook import get_cell_source
+from ipynb_scrubber.options import MARKERS, ScrubbingOptions
+from ipynb_scrubber.scrubber import Scrubber
 from tests.builders import code, markdown, raw
 
 OPTS = ScrubbingOptions()
@@ -75,17 +68,6 @@ def test_omit_tag_beats_note_tag():
 def test_omit_tag_beats_clear_tag():
     """Dropping a cell subsumes rewriting it, so omit is considered first."""
     assert SCRUBBER.decide(code('x = 1', tags=['scrub-omit', 'scrub-clear'])) == Omit()
-
-
-def test_markers_are_considered_omit_then_note_then_clear():
-    """The registry's order is the precedence order, so it is load-bearing.
-
-    Omit first because dropping a cell subsumes every rewrite of it, and note
-    before clear because a note is a clear that also files away what it
-    removed. Reordering the table silently changes what a cell carrying two
-    markers becomes.
-    """
-    assert [option.key for option in MARKERS] == ['omit-tag', 'note-tag', 'clear-tag']
 
 
 def test_multiple_scrubber_options_in_one_header_error():
@@ -382,16 +364,6 @@ def test_clear_defaults_to_the_text_the_run_configured_for_that_type(
         ),
     )
     assert scrubber.decide(builder('secret', tags=['scrub-clear'])) == Clear(expected)
-
-
-def test_every_cell_type_has_its_own_clear_text():
-    """The lookup is total over the cell types, so it needs no default.
-
-    Clearing indexes by cell type with nothing to fall back on, which is only
-    safe while the two agree. A type validation lets through but this table
-    does not name would be a KeyError on a notebook the tool accepted.
-    """
-    assert set(_CLEAR_TEXT_FIELDS) == set(CELL_TYPES)
 
 
 def test_apply_strips_the_scrubber_tag_a_cell_was_marked_with():

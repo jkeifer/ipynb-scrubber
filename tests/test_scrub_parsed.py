@@ -10,8 +10,8 @@ produced before it started delegating through here.
 import json
 
 from ipynb_scrubber import NotebookScrubResult, scrub, scrub_parsed
-from ipynb_scrubber.actions import ScrubbingOptions
 from ipynb_scrubber.notebook import dumps_notebook
+from ipynb_scrubber.options import ScrubbingOptions
 from tests.builders import code, make_notebook
 
 OPTS = ScrubbingOptions()

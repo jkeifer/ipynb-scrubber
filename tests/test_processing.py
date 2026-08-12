@@ -12,10 +12,10 @@ import copy
 
 import pytest
 
-from ipynb_scrubber.actions import ScrubbingOptions
 from ipynb_scrubber.exceptions import InvalidNotebookError, ProcessingError
 from ipynb_scrubber.notebook import get_notebook_language
 from ipynb_scrubber.notes import render_notes
+from ipynb_scrubber.options import ScrubbingOptions
 from ipynb_scrubber.processor import process_notebook
 from tests.builders import code, make_notebook, markdown
 
@@ -64,7 +64,7 @@ def test_internal_bug_surfaces_as_a_bug_not_a_processing_error(monkeypatch):
     def boom(*_args, **_kwargs):
         raise RuntimeError('internal invariant violated')
 
-    monkeypatch.setattr('ipynb_scrubber.actions.Scrubber.decide', boom)
+    monkeypatch.setattr('ipynb_scrubber.scrubber.Scrubber.decide', boom)
 
     nb = make_notebook(code('x = 1'))
     with pytest.raises(RuntimeError, match='internal invariant violated'):
