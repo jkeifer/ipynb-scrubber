@@ -334,6 +334,31 @@ def test_markdown_foreign_comment_beside_an_option_must_still_be_yaml() -> None:
         options('markdown', '<!-- @format -->\n<!-- scrub-omit: -->\n# Answer')
 
 
+@pytest.mark.parametrize(
+    'break_char',
+    ['\r', '\x85', '\u2028', '\u2029'],
+    ids=['carriage-return', 'next-line', 'line-separator', 'paragraph-separator'],
+)
+def test_a_stray_yaml_line_break_in_a_header_raises(break_char: str) -> None:
+    """YAML ends a line at more characters than a split on '\\n' does.
+
+    Every check below the parse finds its text by a line number YAML reported,
+    so one of these inside a header line puts the two out of step: a mark then
+    names the wrong line, or a line that is not there. Neither the crash that
+    followed nor a cell quietly shipping unscrubbed is an answer, so the header
+    is refused and said to be refused.
+    """
+    source = f'#| scrub-clear: a{break_char}   b\n#| other: z\nprint("x")'
+    with pytest.raises(ProcessingError, match='reads as a line break'):
+        options('code', source)
+
+
+def test_a_crlf_header_is_not_a_stray_break() -> None:
+    """A '\\r' ending a line is the break YAML was going to find there anyway."""
+    source = '#| fig-cap: x\r\n#| scrub-clear: hi\r\nprint("x")'
+    assert options('code', source) == {'fig-cap': 'x', 'scrub-clear': 'hi'}
+
+
 def test_duplicate_option_name_raises() -> None:
     with pytest.raises(ProcessingError, match=r"Duplicate option 'scrub-clear'"):
         options('code', '#| scrub-clear: first\n#| scrub-clear: second')
