@@ -215,16 +215,25 @@ class ProjectConfig:
         """Create ProjectConfig from dictionary.
 
         Raises:
-            ScrubberError: On an unknown key, no file entries, an invalid
-                entry, or a path collision.
+            ScrubberError: On an unknown key, a section of the wrong shape, no
+                file entries, an invalid entry, or a path collision.
         """
         reject_unknown_keys(data, cls.TOP_LEVEL_KEYS, 'config key')
 
-        defaults = ScrubbingOptions.from_dict(data.get('options', {}))
+        # Shape before content: both sections are handed to code that iterates
+        # them, and a TOML file can spell either as anything at all. Checked
+        # here so a number where a table belongs is reported against the key
+        # holding it, rather than surfacing as whatever chokes on it first.
+        options_data = data.get('options', {})
+        reject_wrong_type('options', options_data, dict)
+        defaults = ScrubbingOptions.from_dict(options_data)
 
         files_data = data.get('files', [])
+        reject_wrong_type('files', files_data, list)
         if not files_data:
             raise ScrubberError('Config file must contain at least one file entry')
+        for index, entry in enumerate(files_data):
+            reject_wrong_type(f'files[{index}]', entry, dict)
 
         return cls(files=[FileEntry.from_dict(f, defaults) for f in files_data])
 

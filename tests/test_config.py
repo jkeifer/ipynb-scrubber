@@ -302,6 +302,36 @@ def test_config_requires_at_least_one_file():
         ProjectConfig.from_dict({})
 
 
+@pytest.mark.parametrize(
+    ('data', 'expected'),
+    [
+        ({'files': 42}, 'files must be list'),
+        ({'files': 'a.ipynb'}, 'files must be list'),
+        ({'files': [42]}, r'files\[0\] must be dict'),
+        ({'files': ['a.ipynb']}, r'files\[0\] must be dict'),
+        (
+            {
+                'files': [{'input': 'a', 'output': 'b'}, [1, 2]],
+            },
+            r'files\[1\] must be dict',
+        ),
+        (
+            {'options': 42, 'files': [{'input': 'a', 'output': 'b'}]},
+            'options must be dict',
+        ),
+    ],
+)
+def test_a_section_of_the_wrong_shape_is_reported_against_its_key(data, expected):
+    """TOML can spell either section as anything, and both are then iterated.
+
+    Checked where the key is named rather than left to whatever chokes on it:
+    a string 'files' is iterable, so without this the characters of a filename
+    come back as unknown entry keys.
+    """
+    with pytest.raises(ScrubberError, match=expected):
+        ProjectConfig.from_dict(data)
+
+
 def test_direct_construction_defaults_to_default_options():
     entry = FileEntry(input=Path('a.ipynb'), output=Path('b.ipynb'))
     assert entry.options == ScrubbingOptions()
