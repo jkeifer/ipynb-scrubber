@@ -158,8 +158,11 @@ class _Marked:
 
     opts: ScrubbingOptions
     cell_type: str
-    #: Names carried as metadata tags, so a builder can tell which spelling
-    #: its option arrived in.
+    #: The cell's metadata tags, whole and unfiltered. Not a record of where
+    #: this cell's option came from -- the caller asks each source directly and
+    #: does not report back. It is here for the one builder that has to refuse a
+    #: name written as a tag *anywhere* on the cell, whichever spelling brought
+    #: it here, so reading it as provenance would say something it does not.
     tags: frozenset[str]
     header: Header
 
@@ -213,12 +216,15 @@ def _note_action(value: Any, marked: _Marked) -> Note:
     The option carries a note id, or a mapping of ``id`` and optional ``text``.
 
     Raises:
-        ProcessingError: On a metadata tag (nowhere to put the id), a non-code
-            cell, an unusable id, or non-string text.
+        ProcessingError: On the name appearing as a metadata tag (nowhere to
+            put the id), a non-code cell, an unusable id, or non-string text.
         ScrubberError: On an undefined key.
     """
     opts = marked.opts
 
+    # The name being tagged at all is refused, not merely the option having
+    # arrived that way: a tag alongside a well-formed header option is a
+    # spelling of this option that cannot work, so it is worth saying so.
     if opts.note_tag in marked.tags:
         raise ProcessingError(
             f"Option '{opts.note_tag}' is not supported as a cell tag; "
@@ -474,8 +480,10 @@ class Scrubber:
     def decide(self, cell: Cell) -> CellAction:
         """Decide what happens to a cell.
 
-        A tag carries presence and nothing else, exactly like a valueless header
-        option, so both spellings merge into one mapping, the header winning.
+        Each marker asks the two places a cell can carry it, header first, so
+        the header wins a name written both ways. A tag carries presence and
+        nothing else, which is the value a valueless header option resolves to,
+        so a tag builds from ``None``.
 
         Raises:
             ScrubberError: If the options are malformed, misplaced, or ambiguous.
@@ -487,12 +495,14 @@ class Scrubber:
 
         _check_one_scrubber_option(header, self.names)
 
-        cell_options: dict[str, Any] = {**dict.fromkeys(tags), **header.options}
-        marked = _Marked(self.opts, cell_type, frozenset(tags), header)
+        tag_set = frozenset(tags)
+        marked = _Marked(self.opts, cell_type, tag_set, header)
 
         for marker in self.markers:
-            if marker.name in cell_options:
-                return marker.build(cell_options[marker.name], marked)
+            if marker.name in header.options:
+                return marker.build(header.options[marker.name], marked)
+            if marker.name in tag_set:
+                return marker.build(None, marked)
 
         return Keep()
 
