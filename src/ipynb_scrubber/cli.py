@@ -3,15 +3,16 @@ import io
 import os
 import sys
 
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import IO, Any, NoReturn
 
 from .__version__ import __version__
 from .config import ProjectConfig
 from .exceptions import ScrubberError, reporting
 from .notes import require_destination
 from .options import OPTIONS, ScrubbingOptions
+from .paths import identity, stream_identity
 from .processor import scrub
 from .project import scrub_files
 from .staging import stage, staged_batch
@@ -54,10 +55,59 @@ def _discard_unwritable_stdout() -> None:
         os.close(devnull)
 
 
+def _redirected_to(stream: IO[Any]) -> Hashable | None:
+    """The file ``stream`` is redirected to, or None if it is not a file.
+
+    A stream replaced by something buffering in memory -- pytest's capture, an
+    embedded kernel -- has no descriptor to ask about, and one replaced by an
+    object that is merely file-shaped may have no ``fileno`` at all. Both are
+    as good as not being a file for this purpose: there is no path that could
+    collide with them.
+    """
+    try:
+        fileno = stream.fileno()
+    except (AttributeError, OSError, io.UnsupportedOperation):
+        return None
+    return stream_identity(fileno)
+
+
+def _reject_notes_over_the_notebook(notes_file: Path) -> None:
+    """Refuse a notes file that is the notebook going in, or the one coming out.
+
+    The config front end refuses both collisions outright; a shell redirection
+    is the same mistake spelled differently, and it does more damage. The notes
+    are committed *after* the notebook reaches stdout, so writing them over the
+    source is something the successful path does: the run reports no error, and
+    the notebook it read is gone.
+
+    Raises:
+        ScrubberError: If the notes file is the input or the output stream.
+    """
+    target = identity(notes_file)
+    if target == _redirected_to(sys.stdin):
+        raise ScrubberError(
+            f'--notes-file names {notes_file}, which is the notebook being '
+            'read from stdin. The notes are written last, so this would '
+            'replace the source notebook with its own notes and destroy the '
+            'solutions in it.',
+        )
+    if target == _redirected_to(sys.stdout):
+        raise ScrubberError(
+            f'--notes-file names {notes_file}, which is where the scrubbed '
+            'notebook is being written. Both are written, so the notes would '
+            'silently overwrite the notebook and be all that was left.',
+        )
+
+
 def scrub_notebook(args: argparse.Namespace) -> None:
     options = ScrubbingOptions(
         **{option.field: getattr(args, option.field) for option in OPTIONS},
     )
+
+    if args.notes_file is not None:
+        # Before anything is read or written: the point is to refuse the run,
+        # not to notice afterwards.
+        _reject_notes_over_the_notebook(args.notes_file)
 
     with reporting('Error reading input'):
         # Read the raw bytes: a notebook's encoding is a property of the
