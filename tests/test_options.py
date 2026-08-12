@@ -363,6 +363,80 @@ def test_malformed_header_raises_without_leaking_the_yaml_error() -> None:
     assert 'line 1' in str(exc.value)
 
 
+def test_a_code_error_is_numbered_past_the_blank_lines_the_header_joins() -> None:
+    """A code cell's header lines are its source lines, blanks included."""
+    source = '#| scrub-clear: hello\n\n\n#| fig-cap: A: B\nprint("x")'
+    with pytest.raises(ProcessingError, match=r'line 4 has a second'):
+        options('code', source)
+
+
+def test_a_markdown_error_is_numbered_in_the_cell_not_in_the_header() -> None:
+    """One comment holds one header line, so the two still agree here."""
+    with pytest.raises(ProcessingError, match=r'line 2 has a second'):
+        options('markdown', '<!-- scrub-clear: hello -->\n<!-- fig-cap: A: B -->\n## Q')
+
+
+def test_a_markdown_error_is_numbered_past_a_closing_delimiter() -> None:
+    """A '-->' is a source line the header text does not carry.
+
+    Numbering the message off the header would name the line above the one the
+    author has to fix, and every comment closed above it adds another line of
+    drift.
+    """
+    source = '\n'.join(
+        [
+            '<!-- scrub-clear: |',
+            '  a',
+            '-->',
+            '<!-- fig-cap: A: B -->',
+        ],
+    )
+    with pytest.raises(ProcessingError, match=r'line 4 has a second'):
+        options('markdown', source)
+
+
+def test_a_markdown_error_is_numbered_past_every_closing_delimiter() -> None:
+    """Regression: the drift compounds, so one correction cannot be a constant."""
+    source = '\n'.join(
+        [
+            '<!-- scrub-clear: |',
+            '  a',
+            '-->',
+            '<!-- scrub-note: |',
+            '  b',
+            '-->',
+            '<!-- fig-cap: A: B -->',
+        ],
+    )
+    with pytest.raises(ProcessingError, match=r'line 7 has a second'):
+        options('markdown', source)
+
+
+def test_a_markdown_tab_is_found_in_the_header_and_named_in_the_cell() -> None:
+    """The tab is in the YAML; the line the author has to fix is in the cell."""
+    source = '\n'.join(
+        [
+            '<!-- fig-cap: x',
+            '-->',
+            '<!-- scrub-clear: |',
+            '\tdef add(a, b):',
+            '-->',
+        ],
+    )
+    with pytest.raises(ProcessingError, match=r'line 4 contains a tab'):
+        options('markdown', source)
+
+
+def test_a_markdown_header_keeps_no_lines() -> None:
+    """The delimiters do not survive their contents being removed.
+
+    Knowing which source line each header line came from is what numbers an
+    error; it is not licence to write a bare '<!--' above the replacement.
+    """
+    source = '<!-- scrub-clear: hello\n-->\n<!-- fig-cap: a plot -->\n## Q'
+    assert parse_cell_options('markdown', source, OPTIONS).kept == ''
+
+
 def test_a_header_of_only_whitespace_yields_no_options() -> None:
     """Regression: a header with no content is never handed to YAML.
 

@@ -84,6 +84,10 @@ class _Split:
     header: str
     #: The source below the header, verbatim.
     body: str
+    #: Which source line each line of ``header`` was read off, so a line number
+    #: YAML reports about the header can be reported about the cell instead.
+    #: One entry per header line, always.
+    source_lines: tuple[int, ...] = ()
     #: The original source line behind each line of ``header``. Empty for a
     #: header that is replaced whole rather than a line at a time.
     kept_lines: tuple[str, ...] = ()
@@ -96,9 +100,11 @@ def _code_header(source: str) -> _Split:
     follows.
     """
     lines = source.split('\n')
-    # Each header line paired with the source line it came from.
-    header: list[tuple[str, str]] = []
-    pending: list[tuple[str, str]] = []
+    # Each header line paired with the source line it came from. Every line
+    # above the last marker is here, blanks included, so the pairing is the
+    # identity -- which is what lets a code cell keep its header line by line.
+    header: list[tuple[str, int]] = []
+    pending: list[tuple[str, int]] = []
     end = 0
 
     for index, line in enumerate(lines):
@@ -106,17 +112,18 @@ def _code_header(source: str) -> _Split:
         if text.startswith(CODE_MARKER):
             header.extend(pending)
             pending.clear()
-            header.append((text[len(CODE_MARKER) :].removeprefix(' '), line))
+            header.append((text[len(CODE_MARKER) :].removeprefix(' '), index))
             end = index + 1
         elif text:
             break
         else:
-            pending.append(('', line))
+            pending.append(('', index))
 
     return _Split(
         header='\n'.join(yaml_line for yaml_line, _ in header),
         body='\n'.join(lines[end:]),
-        kept_lines=tuple(source_line for _, source_line in header),
+        source_lines=tuple(origin for _, origin in header),
+        kept_lines=tuple(lines[origin] for _, origin in header),
     )
 
 
@@ -124,21 +131,25 @@ def _markdown_header(source: str) -> _Split:
     """Split a markdown cell's source at the end of its leading HTML comments.
 
     No kept lines are reported, so the header is replaced whole: the delimiters
-    do not survive their contents being removed.
+    do not survive their contents being removed. Which source line each header
+    line came from is still reported, since a closing ``-->`` is a source line
+    of its own and leaves the two out of step from there on.
 
     Raises:
         ProcessingError: If a comment is never closed.
     """
     lines = source.split('\n')
-    header: list[str] = []
-    pending: list[str] = []
+    # Each header line paired with the source line it came from, as in
+    # _code_header -- except that here the pairing is not the identity.
+    header: list[tuple[str, int]] = []
+    pending: list[tuple[str, int]] = []
     index = 0
     end = 0
 
     while index < len(lines):
         text = lines[index].strip()
         if not text:
-            pending.append('')
+            pending.append(('', index))
             index += 1
             continue
         if not text.startswith(MARKDOWN_MARKER):
@@ -146,17 +157,17 @@ def _markdown_header(source: str) -> _Split:
 
         header.extend(pending)
         pending.clear()
+        opener = index
         inner = text[len(MARKDOWN_MARKER) :].rstrip()
         index += 1
 
         if inner.endswith(MARKDOWN_SUFFIX):
-            header.append(
-                inner.removesuffix(MARKDOWN_SUFFIX).rstrip().removeprefix(' '),
-            )
+            closed = inner.removesuffix(MARKDOWN_SUFFIX).rstrip().removeprefix(' ')
+            header.append((closed, opener))
             end = index
             continue
 
-        header.append(inner.removeprefix(' '))
+        header.append((inner.removeprefix(' '), opener))
         while True:
             if index >= len(lines):
                 raise ProcessingError(
@@ -166,11 +177,15 @@ def _markdown_header(source: str) -> _Split:
             if lines[index].strip() == MARKDOWN_SUFFIX:
                 index += 1
                 break
-            header.append(lines[index])
+            header.append((lines[index], index))
             index += 1
         end = index
 
-    return _Split('\n'.join(header), '\n'.join(lines[end:]))
+    return _Split(
+        header='\n'.join(yaml_line for yaml_line, _ in header),
+        body='\n'.join(lines[end:]),
+        source_lines=tuple(origin for _, origin in header),
+    )
 
 
 _HEADERS: dict[str, Callable[[str], _Split]] = {
@@ -184,33 +199,38 @@ _HEADERS: dict[str, Callable[[str], _Split]] = {
 _UNQUOTED_COLON = 'mapping values are not allowed here'
 
 
-def _describe(error: yaml.YAMLError, text: str) -> str:
+def _describe(error: yaml.YAMLError, split: _Split) -> str:
     """Turn a YAML parse failure into advice aimed at the header's author.
+
+    A mark places the problem in the header text YAML was handed, but the
+    author reads their own cell, so the text is looked at where YAML found it
+    and the line is numbered where the author wrote it.
 
     Only a ``MarkedYAMLError`` carries a line or a problem, and may carry
     neither.
     """
     if isinstance(error, yaml.MarkedYAMLError):
         mark = error.problem_mark
-        lines = text.split('\n')
+        lines = split.header.split('\n')
 
         if mark is not None and 0 <= mark.line < len(lines):
+            number = split.source_lines[mark.line] + 1
             if '\t' in lines[mark.line]:
                 return (
-                    f'Invalid cell option header: line {mark.line + 1} contains '
+                    f'Invalid cell option header: line {number} contains '
                     'a tab. The header is YAML, which forbids tabs as '
                     'whitespace; indent it with spaces'
                 )
             problem = error.problem
             if problem == _UNQUOTED_COLON:
                 return (
-                    f'Invalid cell option header: line {mark.line + 1} has a '
+                    f'Invalid cell option header: line {number} has a '
                     "second ':' in its value. The header is YAML, so a value "
                     "containing ':' or '#' has to be quoted "
                     '(name: "Figure 1: a plot")'
                 )
             if problem:
-                return f'Invalid cell option header: {problem} (line {mark.line + 1})'
+                return f'Invalid cell option header: {problem} (line {number})'
 
     return f'Invalid cell option header: {error}'
 
@@ -478,7 +498,7 @@ def parse_cell_options(
         # No graph, so no way to say whose header it is. Guessing from raw text
         # claims headers that merely look like ours; staying quiet ships a cell
         # this tool was told to scrub. Report it.
-        raise ProcessingError(_describe(e, split.header)) from e
+        raise ProcessingError(_describe(e, split)) from e
 
     # Where the body starts is a property of the source, not of the header.
     return replace(header, body=split.body)
