@@ -143,8 +143,9 @@ class ScrubbingOptions:
 
 #: Which option holds the replacement text a cleared cell of each type gets,
 #: since no one spelling suits them all: the code text is a comment, which
-#: markdown renders as a heading and a raw cell emits verbatim as itself. Any
-#: cell type nbformat adds later falls back to the code text.
+#: markdown renders as a heading and a raw cell emits verbatim as itself. One
+#: entry per :data:`~.notebook.CELL_TYPES` member, which is every cell type that
+#: survives validation, so the lookup below needs no default.
 _CLEAR_TEXT_FIELDS: dict[str, str] = {
     'code': 'clear_text',
     'markdown': 'clear_text_markdown',
@@ -170,9 +171,11 @@ class _Marked:
     def default_clear_text(self) -> str:
         """The replacement text for a cleared cell whose author supplied none.
 
-        :data:`_CLEAR_TEXT_FIELDS` picks it by cell type.
+        :data:`_CLEAR_TEXT_FIELDS` picks it by cell type. A cell type it does
+        not name never reaches here -- validation refuses the notebook first --
+        so a ``KeyError`` would be this tool disagreeing with itself.
         """
-        field = _CLEAR_TEXT_FIELDS.get(self.cell_type, _CLEAR_TEXT_FIELDS['code'])
+        field = _CLEAR_TEXT_FIELDS[self.cell_type]
         text: str = getattr(self.opts, field)
         return text
 
@@ -407,7 +410,7 @@ def _without_results(cell: Cell) -> Cell:
     """
     updated: Cell = evolve(cell)
 
-    if updated.get('cell_type') == 'code':
+    if updated['cell_type'] == 'code':
         updated['outputs'] = []
         updated['execution_count'] = None
     else:
@@ -432,14 +435,16 @@ def _without_scrubber_tags(cell: Cell, names: frozenset[str]) -> Cell:
 
     # metadata's target is a plain dict[str, Any], not a TypedDict, so an
     # annotated changes mapping here would check nothing; it stays a keyword
-    # argument. cell's target is Cell, a TypedDict, so its changes are typed
-    # and unpacked to get mypy's key and value-type checking back.
-    updated = evolve(metadata, tags=kept)
+    # argument. The cell's own new metadata is written by subscript, where mypy
+    # does check a TypedDict's key and value types; evolve's **changes: Any
+    # would otherwise wave a misspelled key or a wrong value through unchecked.
+    tagless = evolve(metadata, tags=kept)
     if not kept:
-        del updated['tags']
+        del tagless['tags']
 
-    changes: Cell = {'metadata': updated}
-    return evolve(cell, **changes)
+    updated: Cell = evolve(cell)
+    updated['metadata'] = tagless
+    return updated
 
 
 @dataclass(frozen=True)
@@ -489,7 +494,7 @@ class Scrubber:
             ScrubberError: If the options are malformed, misplaced, or ambiguous.
         """
         tags: list[str] = cell.get('metadata', {}).get('tags', [])
-        cell_type = cell.get('cell_type', '')
+        cell_type = cell['cell_type']
         source = get_cell_source(cell)
         header = parse_cell_options(cell_type, source, self.markers)
 
