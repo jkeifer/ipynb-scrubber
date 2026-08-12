@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import tomllib
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
 from .exceptions import ScrubberError
 from .options import OPTIONS, ScrubbingOptions
+from .paths import identity
 from .validation import reject_unknown_keys, reject_wrong_type
 
 
@@ -95,27 +97,32 @@ class FileEntry:
 
         Nothing downstream can notice: the run finishes, reports success, and
         leaves the source holding its own scrubbed copy with every solution
-        gone, unrecoverable outside version control. Paths compare as written,
-        so two spellings that meet only once resolved are not caught.
+        gone, unrecoverable outside version control. Paths are compared by
+        what they name rather than how they are spelled, so a difference of
+        case, of ``..``, or of a symlink cannot hide one behind another.
 
         Raises:
             ScrubberError: If any two of the entry's paths are the same.
         """
-        if self.input == self.output:
+        if identity(self.input) == identity(self.output):
             raise ScrubberError(
                 f'input and output must name different files, but both are '
                 f'{self.input}. The scrubbed notebook is written to output, so '
                 'this would replace the source notebook with its own scrubbed '
                 'copy and destroy the solutions in it.',
             )
-        if self.notes_file == self.input:
+        if self.notes_file is not None and identity(self.notes_file) == identity(
+            self.input,
+        ):
             raise ScrubberError(
                 f'notes-file and input must name different files, but both are '
                 f'{self.input}. The notes are written to notes-file, so this '
                 'would replace the source notebook with a notes file and '
                 'destroy the solutions in it.',
             )
-        if self.notes_file == self.output:
+        if self.notes_file is not None and identity(self.notes_file) == identity(
+            self.output,
+        ):
             raise ScrubberError(
                 f'notes-file and output must name different files, but both '
                 f'are {self.output}. Both are written, so one would silently '
@@ -194,26 +201,28 @@ class ProjectConfig:
             ScrubberError: On two entries writing one path, or one writing over
                 another's input.
         """
-        # FileEntry rejects an entry colliding with itself, so every path
-        # recorded below belongs to exactly one entry.
-        writers: dict[Path, str] = {}
+        # Keyed by what a path names rather than how it is spelled, as in
+        # FileEntry. FileEntry rejects an entry colliding with itself, so every
+        # path recorded below belongs to exactly one entry.
+        writers: dict[Hashable, str] = {}
         for index, entry in enumerate(self.files):
             writes = [('output', entry.output)]
             if entry.notes_file is not None:
                 writes.append(('notes-file', entry.notes_file))
             for key, path in writes:
                 origin = f'files[{index}].{key}'
-                if path in writers:
+                written = identity(path)
+                if written in writers:
                     raise ScrubberError(
-                        f'{writers[path]} and {origin} both write {path}. The '
-                        'batch commits both, so one would silently overwrite '
-                        'the other and whichever landed last is all that would '
-                        'be left.',
+                        f'{writers[written]} and {origin} both write {path}. '
+                        'The batch commits both, so one would silently '
+                        'overwrite the other and whichever landed last is all '
+                        'that would be left.',
                     )
-                writers[path] = origin
+                writers[written] = origin
 
         for index, entry in enumerate(self.files):
-            writer = writers.get(entry.input)
+            writer = writers.get(identity(entry.input))
             if writer is not None:
                 raise ScrubberError(
                     f'{writer} writes {entry.input}, which is '

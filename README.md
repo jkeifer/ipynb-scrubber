@@ -240,9 +240,13 @@ original alone, so in-place scrubbing is not supported — `output` equal to
 destroy the solutions in it. Any of these is a config error that fails the run
 before a single file is written.
 
-Paths are compared as written, so `./lesson.ipynb` and `lesson.ipynb` are the
-same path, but two spellings that only coincide once resolved — through `..`
-or a symlink — are not detected.
+Paths are compared by the file they name rather than by how they are spelled,
+so `./lesson.ipynb`, `notebooks/../lesson.ipynb`, a symlink pointing at
+`lesson.ipynb`, and — on a case-insensitive filesystem — `Lesson.ipynb` are
+all recognised as the same file. Where a path names a file that does not exist
+yet the filesystem has nothing to be asked, and the comparison falls back to
+the resolved spelling; that still sees through `..` and a symlinked parent,
+but two not-yet-created paths differing only in case are not caught.
 
 Unknown keys anywhere in the config — the top level, `[options]`, or a
 `[[files]]` entry — are rejected, and the error names the invalid key and
