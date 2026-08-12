@@ -146,7 +146,38 @@ def test_present_notes_file_is_a_path():
         {'input': 'a.ipynb', 'output': 'b.ipynb', 'notes-file': 'n.md'},
         ScrubbingOptions(),
     )
-    assert entry.notes_file == Path('n.md')
+    assert entry.notes_file == Path.cwd() / 'n.md'
+
+
+def test_relative_paths_resolve_against_the_config_directory(tmp_path: Path):
+    """What an entry names is fixed by the config, not by where the run started.
+
+    The upward search would be pointless otherwise: it finds a config from any
+    subdirectory, and the entries in it would then name different files
+    depending on which subdirectory that was.
+    """
+    entry = FileEntry.from_dict(
+        {
+            'input': 'notebooks/a.ipynb',
+            'output': 'exercises/a.ipynb',
+            'notes-file': 'notes/a.md',
+        },
+        ScrubbingOptions(),
+        tmp_path,
+    )
+    assert entry.input == tmp_path / 'notebooks/a.ipynb'
+    assert entry.output == tmp_path / 'exercises/a.ipynb'
+    assert entry.notes_file == tmp_path / 'notes/a.md'
+
+
+def test_an_absolute_path_ignores_the_config_directory(tmp_path: Path):
+    absolute = tmp_path / 'elsewhere' / 'a.ipynb'
+    entry = FileEntry.from_dict(
+        {'input': str(absolute), 'output': 'b.ipynb'},
+        ScrubbingOptions(),
+        tmp_path / 'config-lives-here',
+    )
+    assert entry.input == absolute
 
 
 def test_scrubbing_onto_the_input_is_rejected():
@@ -216,7 +247,7 @@ def test_two_entries_writing_the_same_notes_file_are_rejected():
 
 
 def test_an_entry_writing_over_another_entrys_input_is_rejected():
-    with pytest.raises(ScrubberError, match=r'files\[0\]\.output writes b\.ipynb'):
+    with pytest.raises(ScrubberError, match=r'files\[0\]\.output writes .*b\.ipynb'):
         ProjectConfig.from_dict(
             {
                 'files': [
@@ -229,7 +260,10 @@ def test_an_entry_writing_over_another_entrys_input_is_rejected():
 
 def test_an_entrys_notes_file_over_an_earlier_entrys_input_is_rejected():
     """A notes file is as capable of destroying a source as an output is."""
-    with pytest.raises(ScrubberError, match=r'files\[1\]\.notes-file writes a\.ipynb'):
+    with pytest.raises(
+        ScrubberError,
+        match=r'files\[1\]\.notes-file writes .*a\.ipynb',
+    ):
         ProjectConfig.from_dict(
             {
                 'files': [
@@ -255,8 +289,8 @@ def test_distinct_entries_sharing_an_input_are_allowed():
         },
     )
     assert [f.output for f in config.files] == [
-        Path('plain.ipynb'),
-        Path('harder.ipynb'),
+        Path.cwd() / 'plain.ipynb',
+        Path.cwd() / 'harder.ipynb',
     ]
 
 
