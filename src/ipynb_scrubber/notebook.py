@@ -9,9 +9,17 @@ from .exceptions import InvalidNotebookError
 #: diffable against one that has been opened and saved.
 NOTEBOOK_INDENT = 1
 
+#: Every cell type nbformat defines. Stated here alone, and enforced by
+#: :func:`_validate_cell` before any cell reaches the rest of the tool, so code
+#: downstream may key off a cell type without a case for one that cannot arrive.
+CELL_TYPES: tuple[str, ...] = ('code', 'markdown', 'raw')
+
 
 class Cell(TypedDict, total=False):
-    cell_type: str
+    #: Required because a cell without one is not a cell: the nbformat schema
+    #: demands it, and :func:`_validate_cell` rejects a notebook whose cells
+    #: lack it, so every cell this tool hands on is known to carry one.
+    cell_type: Required[str]
     source: str | list[str]
     outputs: list[Any]
     execution_count: int | None
@@ -137,10 +145,11 @@ def _validate_cell(i: int, cell: Any) -> None:
         )
 
     cell_type = cell['cell_type']
-    if cell_type not in ('code', 'markdown', 'raw'):
+    if cell_type not in CELL_TYPES:
+        listed = ', '.join(repr(name) for name in CELL_TYPES[:-1])
         raise InvalidNotebookError(
             f"Cell {i} has invalid cell_type '{cell_type}'. "
-            "Must be 'code', 'markdown', or 'raw'",
+            f'Must be {listed}, or {CELL_TYPES[-1]!r}',
         )
 
     metadata = cell.get('metadata', {})

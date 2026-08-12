@@ -1,6 +1,7 @@
 import pytest
 
 from ipynb_scrubber.actions import (
+    _CLEAR_TEXT_FIELDS,
     MARKERS,
     Clear,
     Keep,
@@ -10,7 +11,7 @@ from ipynb_scrubber.actions import (
     ScrubbingOptions,
 )
 from ipynb_scrubber.exceptions import ProcessingError, ScrubberError
-from ipynb_scrubber.notebook import get_cell_source
+from ipynb_scrubber.notebook import CELL_TYPES, get_cell_source
 from tests.builders import code, markdown, raw
 
 OPTS = ScrubbingOptions()
@@ -383,14 +384,14 @@ def test_clear_defaults_to_the_text_the_run_configured_for_that_type(
     assert scrubber.decide(builder('secret', tags=['scrub-clear'])) == Clear(expected)
 
 
-def test_clear_falls_back_to_the_code_text_for_an_unknown_cell_type():
-    """A cell type nbformat adds later still gets text rather than nothing."""
-    cell = {
-        'cell_type': 'heading',
-        'source': 'secret',
-        'metadata': {'tags': ['scrub-clear']},
-    }
-    assert SCRUBBER.decide(cell) == Clear(OPTS.clear_text)
+def test_every_cell_type_has_its_own_clear_text():
+    """The lookup is total over the cell types, so it needs no default.
+
+    Clearing indexes by cell type with nothing to fall back on, which is only
+    safe while the two agree. A type validation lets through but this table
+    does not name would be a KeyError on a notebook the tool accepted.
+    """
+    assert set(_CLEAR_TEXT_FIELDS) == set(CELL_TYPES)
 
 
 def test_apply_strips_the_scrubber_tag_a_cell_was_marked_with():
