@@ -174,6 +174,77 @@ def test_failed_notebook_write_leaves_no_orphan_notes_file(tmp_path):
     assert [p.name for p in tmp_path.iterdir()] == ['sink']
 
 
+def test_notes_file_over_the_stdin_notebook_is_refused(tmp_path):
+    """The source notebook must survive being scrubbed, however it was named.
+
+    The config front end refuses this collision outright; a redirection is the
+    same mistake spelled differently, and worse, because the notes are written
+    only once the notebook has reached stdout -- so nothing fails, the run
+    reports success, and the notebook it read is gone. Its own subprocess so
+    that stdin is a real file with a real inode, which is the whole question.
+    """
+    source = tmp_path / 'lesson.ipynb'
+    source.write_text(json.dumps(make_notebook(code('#| scrub-note: ex-1\nsecret'))))
+    before = source.read_text()
+
+    with source.open('rb') as stdin:
+        result = subprocess.run(
+            [
+                sys.executable,
+                '-m',
+                'ipynb_scrubber.cli',
+                'scrub-notebook',
+                '--notes-file',
+                str(source),
+            ],
+            stdin=stdin,
+            capture_output=True,
+            text=True,
+        )
+
+    assert result.returncode == 1
+    assert 'the notebook being read from stdin' in result.stderr
+    assert 'Traceback' not in result.stderr
+    assert source.read_text() == before
+
+
+def test_notes_file_over_the_stdout_notebook_is_refused(tmp_path):
+    """Both are written, so one would land on the other and be all that is left."""
+    nb = make_notebook(code('#| scrub-note: ex-1\nsecret = 1'))
+    target = tmp_path / 'exercise.ipynb'
+
+    with target.open('wb') as stdout:
+        result = subprocess.run(
+            [
+                sys.executable,
+                '-m',
+                'ipynb_scrubber.cli',
+                'scrub-notebook',
+                '--notes-file',
+                str(target),
+            ],
+            input=json.dumps(nb),
+            text=True,
+            stdout=stdout,
+            stderr=subprocess.PIPE,
+        )
+
+    assert result.returncode == 1
+    assert 'where the scrubbed notebook is being written' in result.stderr
+    assert target.read_text() == ''
+
+
+def test_notes_file_beside_a_piped_notebook_is_allowed(tmp_path, scrub_notebook):
+    """A pipe is no file, so it collides with nothing: the ordinary case works."""
+    nb = make_notebook(code('#| scrub-note: ex-1\nsecret = 1'))
+    notes = tmp_path / 'notes.md'
+
+    result = scrub_notebook('--notes-file', str(notes), input_data=json.dumps(nb))
+
+    assert result.returncode == 0
+    assert 'secret = 1' in notes.read_text()
+
+
 def test_failed_notebook_write_survives_a_stdout_without_a_descriptor(
     tmp_path,
     monkeypatch,
