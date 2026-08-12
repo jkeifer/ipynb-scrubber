@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NoReturn
 
+from .__version__ import __version__
 from .config import ProjectConfig
 from .exceptions import ScrubberError, reporting
 from .notes import require_destination
@@ -114,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description='Scrub notebooks to create exercise versions',
         formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'%(prog)s {__version__}',
     )
     subparsers = parser.add_subparsers(
         title='commands',

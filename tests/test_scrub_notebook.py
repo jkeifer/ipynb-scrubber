@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from ipynb_scrubber import cli
+from ipynb_scrubber import __version__, cli
 from ipynb_scrubber.cli import build_parser
 from ipynb_scrubber.exceptions import ScrubberError
 from ipynb_scrubber.options import OPTIONS, ScrubbingOptions
@@ -223,6 +223,13 @@ def test_no_command_exits_two(scrubber):
     result = scrubber()
     assert result.returncode == 2
     assert 'command required' in result.stderr
+
+
+def test_version_flag_reports_the_installed_version(scrubber):
+    """The first thing a bug report needs, and the one thing it cannot guess."""
+    result = scrubber('--version')
+    assert result.returncode == 0
+    assert result.stdout.split()[-1] == __version__
 
 
 def test_processing_error_exits_one_without_traceback(scrub_notebook):
