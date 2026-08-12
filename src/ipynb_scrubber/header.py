@@ -431,6 +431,19 @@ def _read(split: _Split, options: Collection[HeaderOption]) -> Header:
         )
 
 
+def _names_an_option(source: str, options: Collection[HeaderOption]) -> bool:
+    """Whether ``source`` writes one of this tool's option names anywhere in it.
+
+    Only ever asked before deciding to *attempt* a parse, never to settle who
+    owns what: ownership is read off the parsed keys, below. So the reading is
+    deliberately loose, and it can only err toward parsing a header this tool
+    does not own -- which is what it would have done regardless. It cannot err
+    the other way: a name is a literal string, and an option spelled anything
+    other than that string does nothing at all.
+    """
+    return any(option.name in source for option in options)
+
+
 def parse_cell_options(
     cell_type: str,
     source: str,
@@ -456,6 +469,13 @@ def parse_cell_options(
     build = _HEADERS.get(cell_type)
     if build is None:
         # No comment syntax to hide a header in, so the source is all body.
+        return Header(body=source)
+
+    if cell_type == 'markdown' and not _names_an_option(source, options):
+        # An HTML comment is not a shared option header the way a '#|' run is
+        # -- it is ordinary markdown, and a notebook is full of comments left
+        # by formatters and site generators. Reading every one as YAML fails
+        # the run over a '<!-- @format -->' this tool has no business parsing.
         return Header(body=source)
 
     split = build(source)
