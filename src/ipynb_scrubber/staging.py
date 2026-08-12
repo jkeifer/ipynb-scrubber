@@ -13,6 +13,7 @@ individual file is still whole.
 from __future__ import annotations
 
 import contextlib
+import errno
 import tempfile
 
 from dataclasses import dataclass
@@ -48,8 +49,22 @@ def stage(final: Path, content: str) -> StagedFile:
     exists.
 
     Raises:
-        OSError: If the directory or temporary file cannot be written.
+        OSError: If ``final`` names a directory, or if its directory or
+            temporary file cannot be written.
     """
+    if final.is_dir():
+        # Refused here rather than left to the rename, which is otherwise the
+        # first thing to notice: a directory takes a mode and a neighbouring
+        # temporary file quite happily, so staging would succeed and the commit
+        # would fail -- by which point earlier files in the batch have landed.
+        # A batch is all-or-nothing only while every failure it can have comes
+        # before the first rename.
+        raise IsADirectoryError(
+            errno.EISDIR,
+            'Is a directory, but the output must name a file',
+            str(final),
+        )
+
     final.parent.mkdir(parents=True, exist_ok=True)
 
     temp: Path | None = None

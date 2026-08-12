@@ -243,6 +243,51 @@ output = "{out_dir / 'second.ipynb'}"
     assert [p.name for p in out_dir.iterdir()] == ['first.ipynb']
 
 
+def test_an_output_naming_a_directory_fails_before_anything_is_committed(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """A directory is the one target that stages cleanly and cannot be renamed.
+
+    It takes a mode and a neighbouring temporary quite happily, so were it not
+    refused during staging the batch would fail at the rename -- with every
+    earlier entry already committed, which is the one thing a batch promises
+    cannot happen. The entry naming it is deliberately second, so a commit that
+    ran at all would be visible in the first entry's target.
+    """
+    out_dir = tmp_path / 'out'
+    out_dir.mkdir()
+    existing = out_dir / 'first.ipynb'
+    existing.write_text('{"cells": []}')
+
+    first_input = tmp_path / 'first.ipynb'
+    write(first_input, sample_notebook)
+    second_input = tmp_path / 'second.ipynb'
+    write(second_input, sample_notebook)
+
+    a_directory = tmp_path / 'somewhere'
+    a_directory.mkdir()
+
+    config_path = tmp_path / '.ipynb-scrubber.toml'
+    config_path.write_text(f'''
+[[files]]
+input = "{first_input}"
+output = "{existing}"
+
+[[files]]
+input = "{second_input}"
+output = "{a_directory}"
+''')
+
+    result = scrub_project(cwd=str(tmp_path))
+
+    assert result.returncode == 1
+    assert 'must name a file' in result.stderr
+    assert existing.read_text() == '{"cells": []}'
+    assert list(a_directory.iterdir()) == []
+
+
 def test_scrubbing_a_notebook_onto_itself_leaves_the_source_untouched(
     tmp_path: Path,
     sample_notebook,
