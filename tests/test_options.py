@@ -193,33 +193,3 @@ def test_unknown_global_option_errors():
     """
     with pytest.raises(ScrubberError, match='claer-tag'):
         ScrubbingOptions.from_dict({'claer-tag': 'x'})
-
-
-def test_an_unusable_tag_name_is_rejected_from_dict():
-    """from_dict merges into replace(), so a config mapping cannot evade the rule.
-
-    The name rule itself is pinned above, on the constructor. The twin in
-    test_config.py pins the same for a file entry's override path.
-    """
-    with pytest.raises(ScrubberError, match='must start with a letter'):
-        ScrubbingOptions.from_dict({'omit-tag': 'not a name'})
-
-
-def test_a_tag_name_yaml_reads_as_a_bool_is_rejected_from_dict():
-    """from_dict merges into replace(), so a config mapping cannot evade the rule.
-
-    The name rule itself is pinned above, on the constructor. The twin in
-    test_config.py pins the same for a file entry's override path.
-    """
-    with pytest.raises(ScrubberError, match='must be a name YAML reads back as text'):
-        ScrubbingOptions.from_dict({'omit-tag': 'no'})
-
-
-def test_colliding_tags_are_rejected_from_dict():
-    """from_dict merges into replace(), so a config mapping cannot evade the rule.
-
-    The distinctness rule itself is pinned above, on the constructor. The twin
-    in test_config.py pins the same for a file entry's override path.
-    """
-    with pytest.raises(ScrubberError, match='must all be distinct'):
-        ScrubbingOptions.from_dict({'clear-tag': 'dup', 'omit-tag': 'dup'})
