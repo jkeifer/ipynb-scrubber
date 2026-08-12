@@ -180,7 +180,7 @@ output = "{tmp_path / 'output.ipynb'}"
 
 
 def test_relative_paths(tmp_path: Path, sample_notebook, scrub_project):
-    """input/output paths in the config resolve relative to the process cwd."""
+    """input/output paths in the config resolve relative to the config file."""
     input_dir = tmp_path / 'src'
     input_dir.mkdir()
     write(input_dir / 'notebook.ipynb', sample_notebook)
@@ -196,6 +196,37 @@ output = "dist/notebook.ipynb"
 
     assert result.returncode == 0
     assert (tmp_path / 'dist' / 'notebook.ipynb').exists()
+
+
+def test_relative_paths_do_not_follow_the_cwd(
+    tmp_path: Path,
+    sample_notebook,
+    scrub_project,
+):
+    """An entry names the same file from a subdirectory as from the root.
+
+    This is what makes the upward search worth doing. Were entries resolved
+    against the cwd instead, the search would find a config from anywhere and
+    the entries in it would then name whatever happened to sit below the
+    directory the command was run from -- so the decoy tree here would be
+    scrubbed into a decoy output, and the real one left alone.
+    """
+    decoy = tmp_path / 'sub'
+    for root in (tmp_path, decoy):
+        (root / 'src').mkdir(parents=True)
+        write(root / 'src' / 'notebook.ipynb', sample_notebook)
+
+    (tmp_path / '.ipynb-scrubber.toml').write_text("""
+[[files]]
+input = "src/notebook.ipynb"
+output = "dist/notebook.ipynb"
+""")
+
+    result = scrub_project(cwd=str(decoy))
+
+    assert result.returncode == 0
+    assert (tmp_path / 'dist' / 'notebook.ipynb').exists()
+    assert not (decoy / 'dist').exists()
 
 
 def test_no_config_found(tmp_path: Path, scrub_project):

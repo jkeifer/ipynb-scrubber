@@ -162,7 +162,11 @@ the current directory and moving upward:
 1. `.ipynb-scrubber.toml` (standalone config file)
 1. `pyproject.toml` with `[tool.ipynb-scrubber]` section
 
-This means you can run the command from any subdirectory of your project.
+This means you can run the command from any subdirectory of your project. A
+relative `input`, `output` or `notes-file` is resolved against the directory
+holding the config file, not the directory you ran from, so an entry names the
+same file wherever the command was started. An absolute path is used as
+written.
 
 A `pyproject.toml` encountered during the search that cannot be read or
 parsed as TOML stops the search with an error, rather than being skipped.

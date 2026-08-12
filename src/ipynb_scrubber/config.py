@@ -124,13 +124,25 @@ class FileEntry:
             )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], defaults: ScrubbingOptions) -> Self:
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        defaults: ScrubbingOptions,
+        base_dir: Path | None = None,
+    ) -> Self:
         """Create FileEntry from a config mapping, inheriting from ``defaults``.
+
+        A relative path is resolved against ``base_dir``, the directory the
+        config was read from, so that what an entry names does not depend on
+        where the command was run from. ``None`` means the working directory,
+        for a mapping that came from no file at all.
 
         Raises:
             ScrubberError: On a missing input or output, an unknown key, a
                 wrong-typed or empty value, or duplicate tags or paths.
         """
+        base = Path.cwd() if base_dir is None else base_dir
+
         reject_unknown_keys(
             data,
             cls.OWN_KEYS.keys() | {option.key for option in OPTIONS},
@@ -154,11 +166,11 @@ class FileEntry:
                     'notes-file must not be empty; omit the key entirely for '
                     'no notes file',
                 )
-            notes_file = Path(data['notes-file'])
+            notes_file = base / data['notes-file']
 
         return cls(
-            input=Path(data['input']),
-            output=Path(data['output']),
+            input=base / data['input'],
+            output=base / data['output'],
             options=defaults.merged_with(data),
             notes_file=notes_file,
         )
@@ -211,8 +223,11 @@ class ProjectConfig:
                 )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Self:
+    def from_dict(cls, data: dict[str, Any], base_dir: Path | None = None) -> Self:
         """Create ProjectConfig from dictionary.
+
+        ``base_dir`` is the directory each entry's relative paths are resolved
+        against; ``None`` means the working directory.
 
         Raises:
             ScrubberError: On an unknown key, a section of the wrong shape, no
@@ -235,7 +250,11 @@ class ProjectConfig:
         for index, entry in enumerate(files_data):
             reject_wrong_type(f'files[{index}]', entry, dict)
 
-        return cls(files=[FileEntry.from_dict(f, defaults) for f in files_data])
+        return cls(
+            files=[
+                FileEntry.from_dict(entry, defaults, base_dir) for entry in files_data
+            ],
+        )
 
     @classmethod
     def from_file(cls, config_path: Path) -> Self:
@@ -253,11 +272,15 @@ class ProjectConfig:
                 f'{config_path} does not contain [tool.ipynb-scrubber] section',
             )
 
-        return cls.from_dict(data)
+        return cls.from_dict(data, config_path.parent)
 
     @classmethod
     def discover(cls, start_dir: Path | None = None) -> Self:
         """Discover and load configuration by searching upward from start_dir.
+
+        Entries are resolved against the directory the config was found in,
+        which is what lets the search start anywhere: the run names the same
+        files from a subdirectory as from the project root.
 
         Raises:
             ScrubberError: If no config file found
@@ -268,5 +291,5 @@ class ProjectConfig:
                 'No config file found. Expected .ipynb-scrubber.toml or '
                 'pyproject.toml with [tool.ipynb-scrubber] section',
             )
-        _, data = found
-        return cls.from_dict(data)
+        config_path, data = found
+        return cls.from_dict(data, config_path.parent)
