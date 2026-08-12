@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 
 from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field, replace
@@ -18,6 +19,42 @@ MARKDOWN_SUFFIX = '-->'
 
 #: The scalar styles that open a block: content lives on the lines below.
 _BLOCK_STYLES = frozenset({'|', '>'})
+
+#: Every break YAML ends a line at. A cell is split on ``\n`` alone, so any of
+#: the others sitting inside a header line makes YAML count a line this module
+#: does not -- and from there every mark names the wrong line, or a line that
+#: is not there at all. :func:`_reject_stray_breaks` refuses such a header
+#: rather than let the two drift apart.
+_LINE_BREAK = re.compile(r'\r\n|\r|\n|\x85|\u2028|\u2029')
+
+#: A break closing the header's last line. It ends what the join would have
+#: ended, so it is not a line YAML counts that this module does not.
+_TRAILING_BREAK = re.compile(r'(?:\r\n|[\n\r\x85\u2028\u2029])\Z')
+
+
+def _reject_stray_breaks(header: str) -> None:
+    """Refuse header text YAML would break into more lines than it was built of.
+
+    ``header`` is joined with ``\\n``, so YAML agrees on its length exactly
+    when it finds no break the join did not put there. Two kinds are already
+    accounted for. A ``\\r\\n`` is one break to YAML and ends the line the
+    join's ``\\n`` was going to end anyway, so a CRLF cell is fine. A break at
+    the very end closes the last line and no mark can point past it. Anything
+    else -- a stray ``\\r``, ``\\x85``, ``\\u2028``, ``\\u2029`` -- is a line
+    to YAML and a mere character here, and every mark below it would be off.
+
+    Raises:
+        ProcessingError: If the header carries a break the join did not.
+    """
+    counted = _TRAILING_BREAK.sub('', header)
+    if len(_LINE_BREAK.findall(counted)) == counted.count('\n'):
+        return
+
+    raise ProcessingError(
+        'Invalid cell option header: it contains a control character YAML '
+        'reads as a line break (a lone carriage return, or one of U+0085, '
+        'U+2028, U+2029). Rewrite the header using ordinary line breaks',
+    )
 
 
 @dataclass(frozen=True)
@@ -484,6 +521,10 @@ def parse_cell_options(
         # the author for whitespace: a lone '#|' carrying a tab would come back
         # as an indentation to fix in a header that has no content at all.
         return Header(body=split.body)
+
+    # Before anything reads a mark, since everything below that point trusts
+    # the two to agree on where a line is.
+    _reject_stray_breaks(split.header)
 
     try:
         header = _read(split, options)
