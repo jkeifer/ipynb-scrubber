@@ -366,6 +366,60 @@ def test_a_section_of_the_wrong_shape_is_reported_against_its_key(data, expected
         ProjectConfig.from_dict(data)
 
 
+def test_a_symlinked_output_does_not_disguise_the_input(tmp_path: Path):
+    """Two spellings of one file are one file, whatever the spellings.
+
+    A lexical comparison sees two different strings here and lets the run
+    scrub the source onto itself. Nothing downstream notices: the run reports
+    success and the solutions are gone.
+    """
+    real = tmp_path / 'notebooks'
+    real.mkdir()
+    (real / 'a.ipynb').write_text('{"cells": []}')
+    (tmp_path / 'exercises').symlink_to(real)
+
+    with pytest.raises(ScrubberError, match='input and output must name'):
+        FileEntry.from_dict(
+            {'input': 'notebooks/a.ipynb', 'output': 'exercises/a.ipynb'},
+            ScrubbingOptions(),
+            tmp_path,
+        )
+
+
+def test_a_hardlinked_output_does_not_disguise_the_input(tmp_path: Path):
+    """No spelling relates these two names; only the filesystem knows."""
+    source = tmp_path / 'lesson.ipynb'
+    source.write_text('{"cells": []}')
+    (tmp_path / 'exercise.ipynb').hardlink_to(source)
+
+    with pytest.raises(ScrubberError, match='input and output must name'):
+        FileEntry.from_dict(
+            {'input': 'lesson.ipynb', 'output': 'exercise.ipynb'},
+            ScrubbingOptions(),
+            tmp_path,
+        )
+
+
+def test_two_entries_writing_one_file_by_different_spellings_are_rejected(
+    tmp_path: Path,
+):
+    """The batch commits both, so the target holds whichever landed last."""
+    (tmp_path / 'out').mkdir()
+    (tmp_path / 'out' / 'a.ipynb').write_text('{"cells": []}')
+    (tmp_path / 'link').symlink_to(tmp_path / 'out')
+
+    with pytest.raises(ScrubberError, match='both write'):
+        ProjectConfig.from_dict(
+            {
+                'files': [
+                    {'input': 'one.ipynb', 'output': 'out/a.ipynb'},
+                    {'input': 'two.ipynb', 'output': 'link/a.ipynb'},
+                ],
+            },
+            tmp_path,
+        )
+
+
 def test_direct_construction_defaults_to_default_options():
     entry = FileEntry(input=Path('a.ipynb'), output=Path('b.ipynb'))
     assert entry.options == ScrubbingOptions()
